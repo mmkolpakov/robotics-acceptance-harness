@@ -1,0 +1,11 @@
+---
+schema_version: scenario-composition-manifest.v1
+composition_id: generic.empty_world.short
+base:
+  path: base.yaml
+components: []
+overlays:
+  - path: overlays/short-run.yaml
+    mode: yaml_merge_patch
+matrix: []
+resolution_trace_required: true
