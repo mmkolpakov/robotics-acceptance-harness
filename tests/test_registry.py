@@ -68,6 +68,41 @@ def test_stop_registry_entry_runs_compose_down_for_docker_compose_entrypoint(
     assert "down" in calls[0]
 
 
+def test_stop_registry_entry_passes_stored_compose_env_to_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`down` must run with the same `COMPOSE_PROJECT_NAME`/`ROS_DOMAIN_ID`
+    `start` used, or it tears down the wrong (default) compose project
+    instead of this run's, leaking the real one.
+    """
+    captured_envs: list[dict[str, str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured_envs.append(dict(kwargs.get("env") or {}))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(os, "kill", _already_exited)
+    if os.name == "posix":
+        monkeypatch.setattr(os, "killpg", _already_exited)
+
+    entry = {
+        "pid": 999999,
+        "pgid": 999999,
+        "entrypoint": "docker_compose",
+        "compose_file": "compose.yaml",
+        "compose_env": {
+            "COMPOSE_PROJECT_NAME": "robotics-test-run-42",
+            "ROS_DOMAIN_ID": "73",
+        },
+    }
+    stop_registry_entry(entry)
+
+    assert captured_envs, "expected `docker compose down` to be invoked with an env"
+    assert captured_envs[0]["COMPOSE_PROJECT_NAME"] == "robotics-test-run-42"
+    assert captured_envs[0]["ROS_DOMAIN_ID"] == "73"
+
+
 def test_stop_registry_entry_skips_compose_down_for_non_compose_entrypoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

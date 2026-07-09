@@ -64,14 +64,28 @@ def _stop_compose_stack(entry: dict[str, Any]) -> None:
     # anonymous volumes running. `stop` must bring the stack down explicitly
     # or a "stopped" run leaks resources that collide with the next run's
     # ROS_DOMAIN_ID/network allocation.
+    #
+    # Compose resolves the project to tear down from `COMPOSE_PROJECT_NAME`
+    # (falling back to the compose file's directory name), and this
+    # project's compose files interpolate a required `ROS_DOMAIN_ID` env var
+    # into every service. Running `down` without the exact env `start` used
+    # either targets the *wrong* (default) project -- leaving this run's
+    # containers/network/volumes running -- or fails outright because
+    # `ROS_DOMAIN_ID` is unset. The entry must therefore carry whatever env
+    # `start` captured so `stop` can reproduce it.
     if entry.get("entrypoint") != "docker_compose":
         return
     compose_file = entry.get("compose_file")
     if not compose_file:
         return
+    env = dict(os.environ)
+    for key, value in (entry.get("compose_env") or {}).items():
+        if value is not None:
+            env[str(key)] = str(value)
     with contextlib.suppress(OSError, subprocess.TimeoutExpired):
         subprocess.run(
             ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-t", "10"],
             check=False,
             timeout=30,
+            env=env,
         )
