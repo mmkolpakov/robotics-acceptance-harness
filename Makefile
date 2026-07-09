@@ -31,7 +31,7 @@ doctor:
 
 validate:
 	yamllint .
-	python -m pytest tests/test_resolver.py tests/test_execution_guard.py
+	python -m pytest tests/test_resolver.py tests/test_execution_guard.py tests/test_launching.py
 
 lint:
 	ruff check .

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 defaults:
   run:
@@ -34,6 +35,42 @@ jobs:
           ROBOTICS_CONTRACTS_SCHEMA_DIR: ${{ github.workspace }}/vendor/contracts-schemas
           ROBOTICS_SKIP_ROS_OBSERVER: "1"
         run: make RUN_ID=ci-${GITHUB_RUN_ID} ci
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22  # v4.1.0
+      - name: Sign CI evidence with Cosign keyless
+        run: |
+          set -euo pipefail
+          mapfile -t evidence_files < <(find runs -type f -name 'evidence-manifest.json' | sort)
+          if [[ "${#evidence_files[@]}" -eq 0 ]]; then
+            echo "no evidence manifests to sign" >&2
+            exit 1
+          fi
+          SIGNER="https://github.com/${{ github.repository }}/.github/workflows/ci.yml"
+          for evidence in "${evidence_files[@]}"; do
+            dir="$(dirname "${evidence}")"
+            python3 - "${evidence}" "${SIGNER}" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          data = json.loads(path.read_text(encoding="utf-8"))
+          data["signed"] = True
+          data["signer_identity"] = sys.argv[2]
+          path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          PY
+            cosign sign-blob --yes \
+              --bundle "${dir}/evidence-manifest.sigstore.json" \
+              --output-signature "${evidence}.sig" \
+              --output-certificate "${evidence}.pem" \
+              "${evidence}"
+            cosign verify-blob \
+              --bundle "${dir}/evidence-manifest.sigstore.json" \
+              --certificate-identity-regexp \
+                "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@.*" \
+              --certificate-oidc-issuer \
+                "https://token.actions.githubusercontent.com" \
+              "${evidence}"
+          done
       - name: Upload run artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -41,17 +78,19 @@ jobs:
           name: harness-runs
           path: runs/
       - name: Notify infra cross-repo gate
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/foundation-ready-v0.2')
+        if: >-
+          github.event_name == 'push' &&
+          (github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/foundation-ready-v0.2')
         env:
-          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
         run: |
-          if [[ -z "${CROSS_REPO_TOKEN}" ]]; then
+          if [[ -z "${GH_TOKEN}" ]]; then
             echo "CROSS_REPO_TOKEN missing; skip repository_dispatch"
             exit 0
           fi
-          curl --fail --silent --show-error \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${CROSS_REPO_TOKEN}" \
-            "https://api.github.com/repos/mmkolpakov/droning-simulation-infra/dispatches" \
-            -d '{"event_type":"harness-ci-success","client_payload":{"sha":"'"${GITHUB_SHA}"'"}}'
+          gh api \
+            --method POST \
+            repos/mmkolpakov/droning-simulation-infra/dispatches \
+            -f event_type=harness-ci-success \
+            -f client_payload[sha]="${GITHUB_SHA}"
