@@ -1,8 +1,21 @@
 # robotics-simulation-harness
 
-Thin command-line harness for resolving robotics simulation scenarios, enforcing
-execution guards, supervising process trees, observing ROS graph readiness when
-available, and writing evidence manifests.
+A `pytest` plugin providing one thing: a simulation-only **execution guard**
+for robotics test suites. Everything this repository used to do by hand
+(scenario resolution/composition, process supervision, ROS graph polling,
+evidence writing and signing) is now the job of an industry-standard tool,
+adopted directly by the consuming test suite instead of re-implemented here:
+
+| Old harness responsibility | Standard replacement |
+| --- | --- |
+| `cli.py` scenario runner | `pytest` itself |
+| `process.py` process-group supervision | `pytest-docker` (container lifecycle) |
+| `registry.py` PID files | Docker/pytest-docker process isolation |
+| `signal_coordinator.py` SIGTERM/SIGINT handling | native `pytest` + Docker signal handling |
+| `resolver.py` YAML composition/patching | `Hydra` (OmegaConf) config groups and overlays |
+| `ros_observer.py` ROS graph polling | `launch_testing_ros.WaitForTopics` |
+| `evidence.py` custom evidence JSON + Cosign signing | `pytest --junitxml` + SLSA Provenance (`slsa-github-generator`) |
+| `guard.py` execution guard | **kept** -- rewritten as this `pytest` plugin |
 
 The repository is domain-neutral. It does not contain product scenarios, robot
 descriptions, scene layouts, trained models, or private acceptance data.
@@ -11,57 +24,60 @@ descriptions, scene layouts, trained models, or private acceptance data.
 
 | Tool | Version |
 | --- | --- |
-| Package | 0.2.0 |
+| Package | 0.3.0 |
 | Python | 3.10+ locally, 3.12 in CI |
-| jsonschema | 4.26.0 |
-| ruamel.yaml | 0.19.1 |
-| rich | 14.3.0 |
 | pytest | 9.0.2 |
+| pytest-docker | 3.2.5 |
 | ruff | 0.15.0 |
 | yamllint | 1.38.0 |
+| hydra-core (example) | 1.3.4 |
+| omegaconf (example) | 2.3.1 |
 
 ## Quickstart
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-python -m pip install -e ../robotics-runtime-contracts -e . -r requirements-dev.txt
-make RUN_ID=local e2e
+python -m pip install -e . -r requirements-dev.txt
+make ci
 ```
 
-## Main Commands
+## Using the plugin
+
+Installing this package registers a `pytest11` plugin
+(`robotics-execution-guard`) automatically -- no `-p` flag needed. It adds:
+
+- A `robotics_scenario` fixture. Override it (per test, class, or module) to
+  return a mapping with `target_environment` and
+  `safety.execution_guard.allow_physical_actuation` -- typically composed
+  with Hydra: `OmegaConf.to_container(cfg, resolve=True)["scenario"]`.
+- An autouse `robotics_execution_guard` fixture that calls
+  `enforce_execution_guard(robotics_scenario)` before every test and fails
+  the test (as a setup error, fail-closed) unless the scenario is
+  `target_environment: simulation` with `allow_physical_actuation: false`.
+- A `robotics_physical_actuation` marker and a
+  `--robotics-allow-physical-actuation` CLI flag. A test that legitimately
+  needs to target real hardware must carry **both** the marker and the flag
+  must be passed on the command line; either alone still fails closed.
+
+See `examples/hydra/test_guard_with_hydra.py` for a full Hydra
+compose-API integration, and `examples/launch_testing/test_clock_graph_ready.py`
+for the standard `launch_testing_ros.WaitForTopics` pattern that replaced the
+old bespoke ROS graph poller.
+
+## Main commands
 
 ```bash
-robotics-harness doctor
-robotics-harness scenario resolve --composition examples/generic/composition.yaml --output runs/local/resolved-scenario.json --trace runs/local/resolution-trace.json
-robotics-harness run --scenario runs/local/resolved-scenario.json --evidence runs/local/evidence-manifest.json --run-id local
-robotics-harness status --run-id local
-robotics-harness logs --run-id local
-robotics-harness stop --run-id local
+make validate            # yamllint
+make lint                # ruff
+make test                # plugin unit/integration tests, writes artifacts/reports/results.xml
+make example-hydra       # Hydra-composed-scenario example (needs hydra-core/omegaconf)
+make example-launch-testing  # launch_testing_ros example (needs a ROS 2 Jazzy environment)
+make ci                   # validate + lint + test
 ```
 
-`run` validates the scenario against `robotics-runtime-contracts`, enforces the
-simulation-only execution guard, launches the configured entrypoint through a
-process group runner, and writes evidence under `runs/<run_id>/`.
-
-`run --dry-run` validates and writes evidence without process execution.
-
-`run` observes the ROS graph live with `rclpy` while the launched process is
-still running, and matches `expected_ros_graph` topics, services, and actions
-against real publisher/subscriber/service counts. A launched process exiting
-successfully is never sufficient for an overall `pass`; `graph_ready` must
-also pass. Foundation CI installs `ros-jazzy-ros-base` so this check runs for
-real.
-
-Two environment variables change this behavior, and both are recorded
-honestly in the evidence `checks`, never as a silent `pass`:
-
-- `ROBOTICS_SKIP_ROS_OBSERVER=1` skips the live check and fails closed
-  (`graph_ready: skip`, overall `result: fail`). It exists for local
-  iteration only and must never be set for release or cross-repo evidence.
-- `ROBOTICS_GRAPH_CHECK_EMBEDDED=1` declares that the launch plan itself
-  already enforces graph readiness (for example: `docker compose up
-  --exit-code-from ros-observer`, where a sibling container performs the
-  live `rclpy` check on the same Docker network). `graph_ready` is then
-  reported as derived from the process exit code, which already encodes
-  that outcome.
+CI additionally hashes `results.xml` and calls
+`slsa-framework/slsa-github-generator`'s generic workflow to produce a
+signed SLSA Provenance attestation for the test report -- the de-facto 2026
+evidence standard, replacing the old repository-local Cosign-signed
+`evidence-manifest.json`.

@@ -1,0 +1,6 @@
+---
+target_environment: hardware
+safety:
+  execution_guard:
+    allow_physical_actuation: true
+    required_confirmation_env: ROBOTICS_CONFIRM_HARDWARE

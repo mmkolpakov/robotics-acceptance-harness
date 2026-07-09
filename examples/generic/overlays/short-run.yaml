@@ -1,9 +1,0 @@
----
-simulation:
-  duration_sec: 3
-  wall_timeout_sec: 20
-recording:
-  retention:
-    mode: always
-    ttl_days: 3
-    lifecycle_tag: smoke

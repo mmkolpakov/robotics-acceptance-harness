@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 defaults:
   run:
@@ -18,55 +17,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  test:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           persist-credentials: false
-      - name: Read pinned vendor contracts ref
-        id: vendor_pin
-        run: echo "contracts_ref=$(cat vendor/CONTRACTS_REF)" >> "${GITHUB_OUTPUT}"
-      - name: Require cross-repo token for vendor sync gate
-        run: |
-          if [[ -z "${{ secrets.CROSS_REPO_TOKEN }}" ]]; then
-            echo "CROSS_REPO_TOKEN secret is required for the vendor schema sync gate" >&2
-            exit 1
-          fi
-      - name: Checkout robotics-runtime-contracts at pinned vendor ref
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-        with:
-          repository: mmkolpakov/robotics-runtime-contracts
-          ref: ${{ steps.vendor_pin.outputs.contracts_ref }}
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          path: deps/contracts
-          persist-credentials: false
-      - name: Vendor schema sync gate
-        env:
-          PINNED_REF: ${{ steps.vendor_pin.outputs.contracts_ref }}
-        run: |
-          set -euo pipefail
-          status=0
-          for upstream in deps/contracts/schemas/*.schema.json; do
-            name="$(basename "${upstream}")"
-            local_copy="vendor/contracts-schemas/${name}"
-            if [[ ! -f "${local_copy}" ]]; then
-              echo "missing vendored schema: ${name}" >&2
-              status=1
-              continue
-            fi
-            if ! diff -u "${upstream}" "${local_copy}"; then
-              echo "vendored schema drifted from robotics-runtime-contracts@${PINNED_REF}: ${name}" >&2
-              status=1
-            fi
-          done
-          if [[ "${status}" -ne 0 ]]; then
-            echo "vendor/contracts-schemas is out of sync with robotics-runtime-contracts@${PINNED_REF}" >&2
-            exit 1
-          fi
-          echo "vendor/contracts-schemas matches robotics-runtime-contracts@${PINNED_REF}"
-      - name: Install ROS 2 Jazzy rclpy for the live graph observer
+      # A `--system-site-packages` venv on the runner's system Python 3.12
+      # (matching apt-installed rclpy's interpreter) makes rclpy importable
+      # without cross-interpreter ABI guesswork, while keeping pip installs
+      # isolated from the system environment.
+      - name: Install ROS 2 Jazzy rclpy for the launch_testing_ros example
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -81,77 +45,65 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y ros-jazzy-ros-base
-      # A `--system-site-packages` venv on the runner's system Python 3.12
-      # (matching apt-installed rclpy's interpreter) makes rclpy importable
-      # without cross-interpreter ABI guesswork, while keeping pip installs
-      # isolated from the system environment.
-      - name: Install tools
+      - name: Install package and tools
         run: |
           source /opt/ros/jazzy/setup.bash
           python3 -m venv --system-site-packages .venv
           source .venv/bin/activate
           python -m pip install --disable-pip-version-check -e . -r requirements-dev.txt
-          # Install the authoritative schemas package itself (checked out
-          # above at the pinned vendor ref) so CI exercises the real
-          # `robotics_runtime_contracts.schema_dir()` resolution path that
-          # production installs use, not only the vendored fallback copy.
-          # The vendor sync gate above already proved the two are identical
-          # at this ref, so this is a dependency check, not a schema switch.
-          python -m pip install --disable-pip-version-check --no-deps ./deps/contracts
-      - name: Run checks
+          python -m pip install --disable-pip-version-check -r examples/hydra/requirements.txt
+      - name: Validate + lint
+        run: |
+          source .venv/bin/activate
+          make validate lint
+      - name: Plugin unit/integration tests (JUnit)
+        run: |
+          source .venv/bin/activate
+          make test
+      - name: Hydra scenario-composition example
+        run: |
+          source .venv/bin/activate
+          make example-hydra
+      - name: launch_testing_ros example
         run: |
           source /opt/ros/jazzy/setup.bash
           source .venv/bin/activate
           python -c "import rclpy; print('rclpy ok:', rclpy.__file__)"
-          python -c "from robotics_runtime_contracts import schema_dir; print('contracts schema_dir:', schema_dir())"
-          make RUN_ID=ci-${GITHUB_RUN_ID} ci
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22  # v4.1.0
-      - name: Sign CI evidence with Cosign keyless
+          make example-launch-testing
+      - name: Hash JUnit report for SLSA provenance
+        id: hash
         run: |
           set -euo pipefail
-          mapfile -t evidence_files < <(find runs -type f -name 'evidence-manifest.json' | sort)
-          if [[ "${#evidence_files[@]}" -eq 0 ]]; then
-            echo "no evidence manifests to sign" >&2
-            exit 1
-          fi
-          SIGNER="https://github.com/${{ github.repository }}/.github/workflows/ci.yml"
-          for evidence in "${evidence_files[@]}"; do
-            dir="$(dirname "${evidence}")"
-            python3 - "${evidence}" "${SIGNER}" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-          path = Path(sys.argv[1])
-          data = json.loads(path.read_text(encoding="utf-8"))
-          data["signed"] = True
-          data["signer_identity"] = sys.argv[2]
-          path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-          PY
-            cosign sign-blob --yes \
-              --bundle "${dir}/evidence-manifest.sigstore.json" \
-              --output-signature "${evidence}.sig" \
-              --output-certificate "${evidence}.pem" \
-              "${evidence}"
-            cosign verify-blob \
-              --bundle "${dir}/evidence-manifest.sigstore.json" \
-              --certificate-identity-regexp \
-                "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@.*" \
-              --certificate-oidc-issuer \
-                "https://token.actions.githubusercontent.com" \
-              "${evidence}"
-          done
-      - name: Upload run artifacts
+          cd artifacts/reports
+          echo "hashes=$(sha256sum results.xml | base64 -w0)" >> "${GITHUB_OUTPUT}"
+      - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: harness-runs
-          path: runs/
+          name: junit-results
+          path: artifacts/reports/results.xml
+
+  provenance:
+    needs: [test]
+    permissions:
+      actions: read  # Needed for detection of GitHub Actions environment.
+      id-token: write  # Needed for provenance signing.
+      contents: write  # Needed to upload provenance to a release, if any.
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: "${{ needs.test.outputs.hashes }}"
+      provenance-name: results.xml.intoto.jsonl
+
+  notify-infra:
+    needs: [test, provenance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/foundation-ready-v0.2')
+    steps:
       - name: Notify infra cross-repo gate
-        if: >-
-          github.event_name == 'push' &&
-          (github.ref == 'refs/heads/main' ||
-          github.ref == 'refs/heads/foundation-ready-v0.2')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
