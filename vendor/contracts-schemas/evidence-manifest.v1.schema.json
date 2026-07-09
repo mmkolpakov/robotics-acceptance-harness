@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmkolpakov.github.io/robotics-runtime-contracts/schemas/evidence-manifest.v1.schema.json",
+  "title": "EvidenceManifestV1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "created_at",
+    "result",
+    "ros_domain_id",
+    "stack_lock_sha256",
+    "harness_version",
+    "contracts_version",
+    "infra_image_digest",
+    "signed",
+    "scenario",
+    "artifacts",
+    "checks",
+    "business_repo"
+  ],
+  "properties": {
+    "schema_version": { "const": "evidence-manifest.v1" },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "result": {
+      "type": "string",
+      "enum": ["pass", "fail", "error"]
+    },
+    "ros_domain_id": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "stack_lock_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "harness_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contracts_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "infra_image_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "signed": { "type": "boolean" },
+    "signer_identity": { "type": "string" },
+    "scenario": {
+      "type": "object",
+      "required": ["scenario_id", "resolved_manifest_sha256"],
+      "properties": {
+        "scenario_id": { "type": "string" },
+        "resolved_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "uri", "sha256", "bytes"],
+        "properties": {
+          "name": { "type": "string" },
+          "uri": { "type": "string" },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "bytes": { "type": "integer", "minimum": 0 },
+          "retention": {
+            "$ref": "artifact-store-policy.v1.schema.json#/definitions/retention"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "result"],
+        "properties": {
+          "name": { "type": "string" },
+          "result": {
+            "type": "string",
+            "enum": ["pass", "fail", "executed", "skip"]
+          },
+          "message": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "business_repo": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["url", "commit", "dirty"],
+          "properties": {
+            "url": { "type": "string", "minLength": 1 },
+            "commit": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "dirty": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "result": { "const": "pass" }
+        }
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "not": {
+                "properties": {
+                  "result": { "const": "skip" }
+                },
+                "required": ["result"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

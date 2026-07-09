@@ -4,15 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "robotics-simulation-harness"
-version = "0.1.0"
+version = "0.2.0"
 description = "Thin scenario runner and evidence helper for robotics simulation projects."
 requires-python = ">=3.10"
 readme = "README.md"
 license = "MIT"
 dependencies = [
   "jsonschema==4.26.0",
+  "referencing==0.37.0",
   "rich==14.3.0",
-  "ruamel.yaml==0.19.1"
+  "ruamel.yaml==0.19.1",
 ]
 
 [project.scripts]

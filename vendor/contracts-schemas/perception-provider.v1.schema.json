@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmkolpakov.github.io/robotics-runtime-contracts/schemas/perception-provider.v1.schema.json",
+  "title": "PerceptionProviderV1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "provider_id",
+    "inputs",
+    "outputs"
+  ],
+  "properties": {
+    "schema_version": { "const": "perception-provider.v1" },
+    "provider_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["topic", "type"],
+        "properties": {
+          "topic": { "type": "string" },
+          "type": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["topic", "type", "compatibility_strategy"],
+        "properties": {
+          "topic": { "type": "string" },
+          "type": { "type": "string" },
+          "base_standard": {
+            "type": "string",
+            "enum": ["vision_msgs", "sensor_msgs", "geometry_msgs", "custom"]
+          },
+          "compatibility_strategy": {
+            "type": "string",
+            "enum": [
+              "standard_projection",
+              "custom_message_with_projection",
+              "standard_projection_not_applicable"
+            ]
+          },
+          "projection_topic": { "type": "string" },
+          "adr": { "type": "string" },
+          "architecture_approval": {
+            "type": "object",
+            "required": ["required", "status"],
+            "properties": {
+              "required": { "const": true },
+              "status": {
+                "type": "string",
+                "enum": ["pending", "approved"]
+              },
+              "approver": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "compatibility_strategy": {
+                  "const": "standard_projection_not_applicable"
+                }
+              }
+            },
+            "then": {
+              "required": ["adr", "architecture_approval"],
+              "properties": {
+                "architecture_approval": {
+                  "properties": {
+                    "status": { "const": "approved" }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "compatibility_strategy": {
+                  "const": "custom_message_with_projection"
+                }
+              }
+            },
+            "then": {
+              "required": ["projection_topic"]
+            }
+          }
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

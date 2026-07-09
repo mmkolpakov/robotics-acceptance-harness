@@ -19,7 +19,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -30,4 +30,13 @@ jobs:
       - name: Install tools
         run: python -m pip install --disable-pip-version-check -e . -r requirements-dev.txt
       - name: Run checks
-        run: make ci
+        env:
+          ROBOTICS_CONTRACTS_SCHEMA_DIR: ${{ github.workspace }}/vendor/contracts-schemas
+          ROBOTICS_SKIP_ROS_OBSERVER: "1"
+        run: make RUN_ID=ci-${GITHUB_RUN_ID} ci
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: harness-runs
+          path: runs/

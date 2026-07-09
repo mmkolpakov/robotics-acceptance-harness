@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmkolpakov.github.io/robotics-runtime-contracts/schemas/scenario-composition-manifest.v1.schema.json",
+  "title": "ScenarioCompositionManifestV1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "composition_id",
+    "base",
+    "overlays",
+    "resolution_trace_required"
+  ],
+  "properties": {
+    "schema_version": { "const": "scenario-composition-manifest.v1" },
+    "composition_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "base": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "overlays": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "mode"],
+        "properties": {
+          "path": { "type": "string" },
+          "mode": {
+            "type": "string",
+            "enum": ["yaml_merge_patch", "json_patch"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "matrix": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "values"],
+        "properties": {
+          "name": { "type": "string" },
+          "values": {
+            "type": "array",
+            "items": { "type": ["string", "number", "boolean"] }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "resolution_trace_required": { "const": true }
+  },
+  "additionalProperties": false
+}

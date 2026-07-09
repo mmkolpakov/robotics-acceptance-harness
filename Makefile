@@ -1,7 +1,9 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 
-REPORT_DIR ?= artifacts/reports
+RUN_ID ?= local
+RUNS_ROOT ?= runs
+REPORT_DIR ?= $(RUNS_ROOT)/$(RUN_ID)
 EXAMPLE_COMPOSITION ?= examples/generic/composition.yaml
 RESOLVED_SCENARIO ?= $(REPORT_DIR)/resolved-scenario.json
 RESOLUTION_TRACE ?= $(REPORT_DIR)/resolution-trace.json
@@ -14,9 +16,9 @@ help:
 		'quickstart       install tools and run ci' \
 		'doctor           print tool versions' \
 		'scenario-resolve resolve example scenario with trace' \
-		'run-smoke        create dry-run evidence from resolved scenario' \
-		'e2e              resolve scenario and create evidence' \
-		'status/logs/stop developer convenience commands'
+		'run-smoke        execute example scenario and write evidence' \
+		'e2e              resolve scenario and execute run' \
+		'status/logs/stop lifecycle commands for a run id'
 
 quickstart:
 	python -m pip install --disable-pip-version-check -e . -r requirements-dev.txt
@@ -45,10 +47,12 @@ scenario-resolve:
 		--trace "$(RESOLUTION_TRACE)"
 
 run-smoke: scenario-resolve
+	ROBOTICS_RUNS_ROOT="$(RUNS_ROOT)" ROBOTICS_SKIP_ROS_OBSERVER=1 \
 	robotics-harness run \
 		--scenario "$(RESOLVED_SCENARIO)" \
 		--evidence "$(EVIDENCE)" \
-		--dry-run
+		--run-id "$(RUN_ID)"
+	python -c "import json,sys; d=json.load(open('$(EVIDENCE)', encoding='utf-8')); assert any(c['name']=='process_execution' and c['result']=='executed' for c in d['checks'])"
 
 e2e: run-smoke
 	python -m json.tool "$(RESOLVED_SCENARIO)" > /dev/null
@@ -56,13 +60,13 @@ e2e: run-smoke
 	python -m json.tool "$(EVIDENCE)" > /dev/null
 
 status:
-	robotics-harness status
+	robotics-harness status --run-id "$(RUN_ID)"
 
 logs:
-	robotics-harness logs --tail 80
+	robotics-harness logs --run-id "$(RUN_ID)" --tail 80
 
 stop:
-	robotics-harness stop
+	robotics-harness stop --run-id "$(RUN_ID)"
 
 pre-commit:
 	pre-commit run --all-files
@@ -70,4 +74,4 @@ pre-commit:
 ci: validate lint test e2e
 
 clean:
-	rm -rf artifacts .pytest_cache .ruff_cache
+	rm -rf artifacts runs .pytest_cache .ruff_cache

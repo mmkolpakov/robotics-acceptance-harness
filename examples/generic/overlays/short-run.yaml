@@ -1,6 +1,7 @@
 ---
 simulation:
-  duration_sec: 5
+  duration_sec: 3
+  wall_timeout_sec: 20
 recording:
   retention:
     mode: always

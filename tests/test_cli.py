@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 from robotics_simulation_harness.cli import main
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_cli_resolve_and_run(tmp_path: Path, monkeypatch) -> None:
+def test_cli_resolve_and_real_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     resolved = tmp_path / "resolved.json"
     trace = tmp_path / "trace.json"
     evidence = tmp_path / "evidence.json"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("ROBOTICS_RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("ROBOTICS_SKIP_ROS_OBSERVER", "1")
 
     monkeypatch.setattr(
         "sys.argv",
@@ -31,6 +37,14 @@ def test_cli_resolve_and_run(tmp_path: Path, monkeypatch) -> None:
     assert resolved.exists()
     assert trace.exists()
 
+    data = json.loads(resolved.read_text(encoding="utf-8"))
+    data["launch"] = {
+        "entrypoint": "external_command",
+        "package": sys.executable,
+        "arguments": ["-c", "print('ok')"],
+    }
+    resolved.write_text(json.dumps(data), encoding="utf-8")
+
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -40,10 +54,60 @@ def test_cli_resolve_and_run(tmp_path: Path, monkeypatch) -> None:
             str(resolved),
             "--evidence",
             str(evidence),
+            "--run-id",
+            "test-run",
+        ],
+    )
+    assert main() == 0
+    evidence_data = json.loads(evidence.read_text(encoding="utf-8"))
+    assert evidence_data["result"] == "pass"
+    assert any(
+        check["name"] == "process_execution" and check["result"] == "executed"
+        for check in evidence_data["checks"]
+    )
+
+
+def test_cli_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    resolved = tmp_path / "resolved.json"
+    evidence = tmp_path / "validation.json"
+    monkeypatch.setenv("ROBOTICS_RUNS_ROOT", str(tmp_path / "runs"))
+
+    composition = ROOT / "examples" / "generic" / "composition.yaml"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "robotics-harness",
+            "scenario",
+            "resolve",
+            "--composition",
+            str(composition),
+            "--output",
+            str(resolved),
+            "--trace",
+            str(tmp_path / "trace.json"),
+        ],
+    )
+    assert main() == 0
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "robotics-harness",
+            "run",
+            "--scenario",
+            str(resolved),
+            "--evidence",
+            str(evidence),
+            "--run-id",
+            "dry-run",
             "--dry-run",
         ],
     )
     assert main() == 0
     data = json.loads(evidence.read_text(encoding="utf-8"))
     assert data["result"] == "pass"
-    assert data["scenario"]["scenario_id"] == "generic.empty_world"
+    assert any(check["name"] == "dry_run" for check in data["checks"])
+    assert not any(
+        check["name"] == "process_execution" and check["result"] == "executed"
+        for check in data["checks"]
+    )
