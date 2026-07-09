@@ -82,6 +82,7 @@ jobs:
           github.event_name == 'push' &&
           (github.ref == 'refs/heads/main' ||
           github.ref == 'refs/heads/foundation-ready-v0.2')
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
         run: |
@@ -94,3 +95,4 @@ jobs:
             repos/mmkolpakov/droning-simulation-infra/dispatches \
             -f event_type=harness-ci-success \
             -f client_payload[sha]="${GITHUB_SHA}"
+          echo "repository_dispatch harness-ci-success sent"
