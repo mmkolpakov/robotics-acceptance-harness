@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Iterator
 
 import pytest
+
+from robotics_simulation_harness.ros_observer import SimClock
 
 rclpy = pytest.importorskip("rclpy", reason="rclpy (ROS 2) is required for live graph checks")
 
@@ -14,6 +18,36 @@ from robotics_simulation_harness.ros_observer import (  # noqa: E402
     RosObserverError,
     observe_ros_graph,
 )
+
+
+def _clock_msg(sec: int) -> object:
+    class _Stamp:
+        nanosec = 0
+
+    _Stamp.sec = sec  # type: ignore[attr-defined]
+
+    class _Msg:
+        clock = _Stamp()
+
+    return _Msg()
+
+
+def test_sim_clock_falls_back_to_wall_time_when_no_clock_observed() -> None:
+    clock = SimClock()
+    time.sleep(0.05)
+    assert clock.elapsed() >= 0.04
+
+
+def test_sim_clock_prefers_sim_time_once_observed() -> None:
+    clock = SimClock()
+    clock.callback(_clock_msg(100))
+    # The first `/clock` message establishes the sim-time origin: elapsed
+    # sim time from that exact instant is ~0 regardless of wall time.
+    assert clock.elapsed() < 1
+    clock.callback(_clock_msg(150))
+    # Wall time barely moved, but sim time jumped 50s: the sim-time reading
+    # must win so a deadline expressed against sim seconds actually fires.
+    assert clock.elapsed() >= 49
 
 
 @pytest.fixture
@@ -167,6 +201,50 @@ def test_require_clock_fails_when_clock_topic_absent() -> None:
     result = observe_ros_graph(graph, wall_timeout_sec=1)
     assert not result.ok
     assert "/clock" in result.message
+
+
+def test_concurrent_readiness_checks_all_items_in_one_loop(fixture_node: Node) -> None:
+    # Topic B's publisher only appears ~0.5s after the observer starts.
+    # A sequential-per-item implementation would already have burned most of
+    # topic A's own timeout window before even looking at topic B; the
+    # concurrent single-loop implementation must pick both up well inside a
+    # short shared deadline because it inspects every pending item on each
+    # spin iteration.
+    fixture_node.create_publisher(String, "/observer_test/concurrent_a", 10)
+
+    def _publish_b_late() -> None:
+        time.sleep(0.5)
+        fixture_node.create_publisher(String, "/observer_test/concurrent_b", 10)
+
+    threading.Thread(target=_publish_b_late, daemon=True).start()
+
+    graph = {
+        "graph_ready_timeout_sec": 3,
+        "require_clock": False,
+        "topics": [
+            {
+                "name": "/observer_test/concurrent_a",
+                "type": "std_msgs/msg/String",
+                "publisher_match": {"min_count": 1, "timeout_sec": 3},
+                "subscriber_match": {"min_count": 0, "timeout_sec": 3},
+            },
+            {
+                "name": "/observer_test/concurrent_b",
+                "type": "std_msgs/msg/String",
+                "publisher_match": {"min_count": 1, "timeout_sec": 3},
+                "subscriber_match": {"min_count": 0, "timeout_sec": 3},
+            },
+        ],
+        "services": [],
+        "actions": [],
+    }
+    started = time.monotonic()
+    result = observe_ros_graph(graph, wall_timeout_sec=3)
+    elapsed = time.monotonic() - started
+    assert result.ok, result.message
+    assert result.observed["topics"]["/observer_test/concurrent_a"]["publishers"] >= 1
+    assert result.observed["topics"]["/observer_test/concurrent_b"]["publishers"] >= 1
+    assert elapsed < 2.5
 
 
 def test_rclpy_missing_raises_observer_error(monkeypatch: pytest.MonkeyPatch) -> None:
