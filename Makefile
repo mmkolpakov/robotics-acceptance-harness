@@ -47,12 +47,15 @@ scenario-resolve:
 		--trace "$(RESOLUTION_TRACE)"
 
 run-smoke: scenario-resolve
-	ROBOTICS_RUNS_ROOT="$(RUNS_ROOT)" ROBOTICS_SKIP_ROS_OBSERVER=1 \
+	ROBOTICS_RUNS_ROOT="$(RUNS_ROOT)" \
 	robotics-harness run \
 		--scenario "$(RESOLVED_SCENARIO)" \
 		--evidence "$(EVIDENCE)" \
 		--run-id "$(RUN_ID)"
-	python -c "import json,sys; d=json.load(open('$(EVIDENCE)', encoding='utf-8')); assert any(c['name']=='process_execution' and c['result']=='executed' for c in d['checks'])"
+	python -c "import json,sys; d=json.load(open('$(EVIDENCE)', encoding='utf-8')); \
+		assert any(c['name']=='process_execution' and c['result']=='executed' for c in d['checks']); \
+		assert any(c['name']=='graph_ready' and c['result']=='pass' for c in d['checks']), d['checks']; \
+		assert d['result'] == 'pass', d"
 
 e2e: run-smoke
 	python -m json.tool "$(RESOLVED_SCENARIO)" > /dev/null

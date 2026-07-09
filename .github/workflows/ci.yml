@@ -20,21 +20,85 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - name: Read pinned vendor contracts ref
+        id: vendor_pin
+        run: echo "contracts_ref=$(cat vendor/CONTRACTS_REF)" >> "${GITHUB_OUTPUT}"
+      - name: Require cross-repo token for vendor sync gate
+        run: |
+          if [[ -z "${{ secrets.CROSS_REPO_TOKEN }}" ]]; then
+            echo "CROSS_REPO_TOKEN secret is required for the vendor schema sync gate" >&2
+            exit 1
+          fi
+      - name: Checkout robotics-runtime-contracts at pinned vendor ref
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          python-version: "3.12"
+          repository: mmkolpakov/robotics-runtime-contracts
+          ref: ${{ steps.vendor_pin.outputs.contracts_ref }}
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          path: deps/contracts
+          persist-credentials: false
+      - name: Vendor schema sync gate
+        env:
+          PINNED_REF: ${{ steps.vendor_pin.outputs.contracts_ref }}
+        run: |
+          set -euo pipefail
+          status=0
+          for upstream in deps/contracts/schemas/*.schema.json; do
+            name="$(basename "${upstream}")"
+            local_copy="vendor/contracts-schemas/${name}"
+            if [[ ! -f "${local_copy}" ]]; then
+              echo "missing vendored schema: ${name}" >&2
+              status=1
+              continue
+            fi
+            if ! diff -u "${upstream}" "${local_copy}"; then
+              echo "vendored schema drifted from robotics-runtime-contracts@${PINNED_REF}: ${name}" >&2
+              status=1
+            fi
+          done
+          if [[ "${status}" -ne 0 ]]; then
+            echo "vendor/contracts-schemas is out of sync with robotics-runtime-contracts@${PINNED_REF}" >&2
+            exit 1
+          fi
+          echo "vendor/contracts-schemas matches robotics-runtime-contracts@${PINNED_REF}"
+      - name: Install ROS 2 Jazzy rclpy for the live graph observer
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y curl gnupg lsb-release
+          sudo curl -sSL -o /usr/share/keyrings/ros-archive-keyring.gpg \
+            https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
+          arch="$(dpkg --print-architecture)"
+          codename="$(lsb_release -cs)"
+          keyring=/usr/share/keyrings/ros-archive-keyring.gpg
+          repo_url="http://packages.ros.org/ros2/ubuntu"
+          echo "deb [arch=${arch} signed-by=${keyring}] ${repo_url} ${codename} main" \
+            | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ros-jazzy-ros-base
+      # A `--system-site-packages` venv on the runner's system Python 3.12
+      # (matching apt-installed rclpy's interpreter) makes rclpy importable
+      # without cross-interpreter ABI guesswork, while keeping pip installs
+      # isolated from the system environment.
       - name: Install tools
-        run: python -m pip install --disable-pip-version-check -e . -r requirements-dev.txt
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          python3 -m venv --system-site-packages .venv
+          source .venv/bin/activate
+          python -m pip install --disable-pip-version-check -e . -r requirements-dev.txt
       - name: Run checks
         env:
           ROBOTICS_CONTRACTS_SCHEMA_DIR: ${{ github.workspace }}/vendor/contracts-schemas
-          ROBOTICS_SKIP_ROS_OBSERVER: "1"
-        run: make RUN_ID=ci-${GITHUB_RUN_ID} ci
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source .venv/bin/activate
+          python -c "import rclpy; print('rclpy ok:', rclpy.__file__)"
+          make RUN_ID=ci-${GITHUB_RUN_ID} ci
       - name: Install Cosign
         uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22  # v4.1.0
       - name: Sign CI evidence with Cosign keyless

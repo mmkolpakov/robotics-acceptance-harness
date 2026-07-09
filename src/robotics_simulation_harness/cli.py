@@ -144,6 +144,30 @@ def cmd_run(args: argparse.Namespace) -> int:
                         "state": "running",
                     }
                 )
+
+            # Graph readiness must be observed while the launched process is
+            # still alive. Observing after `wait()` would only ever see a
+            # process that has already exited (and, for `docker compose run
+            # --rm`, a container that no longer exists), which is exactly the
+            # "fake pass" failure mode this harness must not reproduce.
+            graph_check_embedded = os.environ.get("ROBOTICS_GRAPH_CHECK_EMBEDDED") == "1"
+            skip_observer = os.environ.get("ROBOTICS_SKIP_ROS_OBSERVER") == "1"
+            live_observation: tuple[str, str] | None = None
+            if not graph_check_embedded and not skip_observer:
+                try:
+                    observation = observe_ros_graph(
+                        scenario["expected_ros_graph"],
+                        wall_timeout_sec=int(
+                            scenario["expected_ros_graph"]["graph_ready_timeout_sec"]
+                        ),
+                    )
+                    live_observation = (
+                        "pass" if observation.ok else "fail",
+                        observation.message,
+                    )
+                except RosObserverError as exc:
+                    live_observation = ("fail", str(exc))
+
             process = runner.wait()
             if runner.process is not None:
                 entry = registry.read() or {}
@@ -175,27 +199,34 @@ def cmd_run(args: argparse.Namespace) -> int:
                 result = "fail"
             else:
                 _append_check(checks, "process_exit", "pass")
-                if os.environ.get("ROBOTICS_SKIP_ROS_OBSERVER") == "1":
-                    _append_check(checks, "graph_ready", "pass", "observer skipped by env")
+                if graph_check_embedded:
+                    # The launch plan itself enforces graph readiness (for
+                    # example: `docker compose up --exit-code-from
+                    # ros-observer`, where a sibling container performs a live
+                    # rclpy check on the same network). `process_exit` above
+                    # already reflects that outcome, so it is reported here
+                    # honestly instead of re-declaring an independent "pass".
+                    _append_check(
+                        checks,
+                        "graph_ready",
+                        "pass",
+                        "verified by embedded in-network observer; derived from process exit",
+                    )
                     result = "pass"
+                elif skip_observer:
+                    # A skipped check must never be reported as a passing
+                    # release/cross-repo check. Fail closed instead of lying.
+                    _append_check(
+                        checks, "graph_ready", "skip", "observer skipped by env; fail-closed"
+                    )
+                    result = "fail"
+                elif live_observation is not None:
+                    outcome, message = live_observation
+                    _append_check(checks, "graph_ready", outcome, message)
+                    result = outcome
                 else:
-                    try:
-                        observation = observe_ros_graph(
-                            scenario["expected_ros_graph"],
-                            wall_timeout_sec=int(
-                                scenario["expected_ros_graph"]["graph_ready_timeout_sec"]
-                            ),
-                        )
-                        _append_check(
-                            checks,
-                            "graph_ready",
-                            "pass" if observation.ok else "fail",
-                            observation.message,
-                        )
-                        result = "pass" if observation.ok else "fail"
-                    except RosObserverError as exc:
-                        _append_check(checks, "graph_ready", "fail", str(exc))
-                        result = "fail"
+                    _append_check(checks, "graph_ready", "fail", "graph observation did not run")
+                    result = "fail"
     except (SchemaValidationError, ExecutionGuardError, LaunchError) as exc:
         _append_check(checks, "preflight", "fail", str(exc))
         result = "fail"

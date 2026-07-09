@@ -45,5 +45,23 @@ simulation-only execution guard, launches the configured entrypoint through a
 process group runner, and writes evidence under `runs/<run_id>/`.
 
 `run --dry-run` validates and writes evidence without process execution.
-Foundation CI may set `ROBOTICS_SKIP_ROS_OBSERVER=1` when `rclpy` is unavailable
-on the runner image.
+
+`run` observes the ROS graph live with `rclpy` while the launched process is
+still running, and matches `expected_ros_graph` topics, services, and actions
+against real publisher/subscriber/service counts. A launched process exiting
+successfully is never sufficient for an overall `pass`; `graph_ready` must
+also pass. Foundation CI installs `ros-jazzy-ros-base` so this check runs for
+real.
+
+Two environment variables change this behavior, and both are recorded
+honestly in the evidence `checks`, never as a silent `pass`:
+
+- `ROBOTICS_SKIP_ROS_OBSERVER=1` skips the live check and fails closed
+  (`graph_ready: skip`, overall `result: fail`). It exists for local
+  iteration only and must never be set for release or cross-repo evidence.
+- `ROBOTICS_GRAPH_CHECK_EMBEDDED=1` declares that the launch plan itself
+  already enforces graph readiness (for example: `docker compose up
+  --exit-code-from ros-observer`, where a sibling container performs the
+  live `rclpy` check on the same Docker network). `graph_ready` is then
+  reported as derived from the process exit code, which already encodes
+  that outcome.

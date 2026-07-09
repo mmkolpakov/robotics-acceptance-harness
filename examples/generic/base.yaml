@@ -7,10 +7,10 @@ launch:
   entrypoint: external_command
   package: python3
   arguments:
-    - "-c"
-    - "print('foundation-harness-ok')"
+    - "examples/generic/rclpy_clock_publisher.py"
+    - "6"
 simulation:
-  duration_sec: 5
+  duration_sec: 6
   wall_timeout_sec: 30
   headless: true
   physics_engine: gz-physics-dartsim-plugin
@@ -22,7 +22,7 @@ expected_ros_graph:
     - name: /clock
       type: rosgraph_msgs/msg/Clock
       publisher_match:
-        min_count: 0
+        min_count: 1
         timeout_sec: 5
       subscriber_match:
         min_count: 0

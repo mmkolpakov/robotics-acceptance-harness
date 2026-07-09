@@ -29,6 +29,16 @@ def merge_patch(base: Any, patch: Any, source: str, trace: list[TraceEntry], pat
     if patch is None:
         trace.append(TraceEntry(source, path or "/", "remove", base, None))
         return None
+    if isinstance(base, list) and isinstance(patch, list):
+        # JSON/YAML merge patch (RFC 7396) always replaces arrays wholesale
+        # rather than merging element-by-element. That is standards-correct
+        # but silently drops base entries (for example: a base `/clock`
+        # topic contract) whenever an overlay only meant to add one item.
+        # Surface it as a distinct, greppable trace operation instead of a
+        # generic "replace" so authors can see exactly what was dropped.
+        if base != patch:
+            trace.append(TraceEntry(source, path or "/", "list_replaced", base, patch))
+        return patch
     if not isinstance(base, dict) or not isinstance(patch, dict):
         if base != patch:
             trace.append(TraceEntry(source, path or "/", "replace", base, patch))

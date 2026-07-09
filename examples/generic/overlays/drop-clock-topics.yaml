@@ -1,0 +1,16 @@
+---
+# Negative-test fixture: replacing `expected_ros_graph.topics` with a list
+# that omits `/clock` demonstrates the merge-patch "list replaces wholesale"
+# hazard (RFC 7396). It must be visible in the resolution trace as
+# `list_replaced`, and the resulting scenario must fail schema validation
+# because `require_clock: true` requires a `/clock` entry in `topics`.
+expected_ros_graph:
+  topics:
+    - name: /camera/image
+      type: sensor_msgs/msg/Image
+      publisher_match:
+        min_count: 1
+        timeout_sec: 5
+      subscriber_match:
+        min_count: 0
+        timeout_sec: 5
