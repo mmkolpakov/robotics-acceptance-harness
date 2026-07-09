@@ -35,11 +35,33 @@ def _runs_root() -> Path:
     return Path(os.environ.get("ROBOTICS_RUNS_ROOT", "runs")).resolve()
 
 
-def _default_digest() -> str:
-    return os.environ.get(
-        "ROBOTICS_INFRA_IMAGE_DIGEST",
-        "sha256:e7a30ca835e0419b929658b4d540aa1ec347b28a65bf1e9357f7d46793fa07ac",
-    )
+# A well-formed but unambiguous "no real image" sentinel. Evidence always
+# requires `infra_image_digest` (even a dry-run or a non-container
+# `external_command`/`ros2_launch` scenario has to satisfy the schema), but
+# this must never be a specific-looking, plausible-but-fake sha256 like the
+# hardcoded default it replaces: that silently made release evidence claim a
+# tested image that was never actually built for the run it describes.
+_NO_IMAGE_DIGEST_SENTINEL = "sha256:" + "0" * 64
+
+
+class MissingDigestError(RuntimeError):
+    pass
+
+
+def _resolve_infra_image_digest(entrypoint: str | None) -> str:
+    digest = os.environ.get("ROBOTICS_INFRA_IMAGE_DIGEST")
+    if digest:
+        return digest
+    if entrypoint == "docker_compose":
+        # A `docker_compose` scenario always launches a real, specific
+        # container image. Fabricating its digest is exactly the "fake
+        # release evidence" failure mode this must fail closed against
+        # instead: refuse to run rather than lie about what was tested.
+        raise MissingDigestError(
+            "ROBOTICS_INFRA_IMAGE_DIGEST is required for docker_compose runs; "
+            "refusing to fabricate the tested image digest in evidence"
+        )
+    return _NO_IMAGE_DIGEST_SENTINEL
 
 
 def _stack_lock_sha() -> str:
@@ -51,6 +73,36 @@ def _stack_lock_sha() -> str:
 
 def _allocate_domain_id(run_id: str) -> int:
     return int(hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:8], 16) % 100 + 1
+
+
+def _resolve_business_repo(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Identify the "business" repo/commit this run is testing on behalf of.
+
+    Explicit `--business-repo-*` flags win; otherwise fall back to the
+    ambient `GITHUB_*` env vars every GitHub Actions job already exports, so
+    CI callers (harness's own CI, and infra's cross-repo gate) get a
+    non-null `business_repo` for free without extra wiring. Returns `None`
+    only when neither source has enough information, matching the schema's
+    `business_repo: null` for purely local/manual runs.
+    """
+    url = getattr(args, "business_repo_url", "") or os.environ.get("ROBOTICS_BUSINESS_REPO_URL", "")
+    commit = getattr(args, "business_repo_commit", "") or os.environ.get(
+        "ROBOTICS_BUSINESS_REPO_COMMIT", ""
+    )
+    if not url and not commit:
+        server = os.environ.get("GITHUB_SERVER_URL")
+        repository = os.environ.get("GITHUB_REPOSITORY")
+        sha = os.environ.get("GITHUB_SHA")
+        if server and repository and sha:
+            url, commit = f"{server}/{repository}", sha
+    if not url or not commit:
+        return None
+    if getattr(args, "business_repo_dirty", False):
+        dirty = True
+    else:
+        dirty_env = os.environ.get("ROBOTICS_BUSINESS_REPO_DIRTY", "")
+        dirty = dirty_env.strip().lower() in {"1", "true", "yes"}
+    return {"url": url, "commit": commit, "dirty": dirty}
 
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
@@ -82,6 +134,26 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+_COMPOSE_ENV_KEYS = (
+    "COMPOSE_PROJECT_NAME",
+    "ROS_DOMAIN_ID",
+    "RUN_ID",
+    "FASTRTPS_DEFAULT_PROFILES_FILE",
+    "RMW_IMPLEMENTATION",
+    "IMAGE_TAG",
+)
+
+
+def _compose_env_snapshot() -> dict[str, str]:
+    # `stop`/`docker compose down` must reproduce the exact env `start` used
+    # to launch the stack (notably `COMPOSE_PROJECT_NAME` and the required
+    # `ROS_DOMAIN_ID`), or it either tears down the wrong (default) project
+    # or fails outright. Persist it in the registry entry instead of relying
+    # on `stop`'s own ambient environment, which is very often a different
+    # shell/process entirely.
+    return {key: os.environ[key] for key in _COMPOSE_ENV_KEYS if key in os.environ}
+
+
 def _append_check(checks: list[dict[str, str]], name: str, result: str, message: str = "") -> None:
     item = {"name": name, "result": result}
     if message:
@@ -102,6 +174,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     checks: list[dict[str, str]] = []
     result = "error"
     scenario: dict[str, Any] = {}
+    infra_image_digest = _NO_IMAGE_DIGEST_SENTINEL
     env_domain = os.environ.get("ROS_DOMAIN_ID")
     ros_domain_id = int(env_domain) if env_domain else _allocate_domain_id(run_id)
     registry = ProcessRegistry(registry_path(run_id, runs_root))
@@ -112,10 +185,18 @@ def cmd_run(args: argparse.Namespace) -> int:
         _append_check(checks, "schema_validation", "pass")
         enforce_execution_guard(scenario)
         _append_check(checks, "execution_guard", "pass")
+        infra_image_digest = _resolve_infra_image_digest(scenario["launch"].get("entrypoint"))
 
         if args.dry_run:
-            _append_check(checks, "dry_run", "pass")
-            result = "pass"
+            # A dry run never launches anything, so it must never be
+            # confused with a real, executed, passing release check: the
+            # schema enforces this by requiring a `process_execution`
+            # check, and rejecting `result: pass` unless that check is
+            # `executed`.
+            _append_check(
+                checks, "process_execution", "not_run", "dry-run: process not launched"
+            )
+            result = "not_run"
         else:
             plan = build_launch_plan(scenario)
             compose_file = (
@@ -146,6 +227,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                         "command": plan.command,
                         "entrypoint": plan.entrypoint,
                         "compose_file": compose_file,
+                        "compose_env": _compose_env_snapshot(),
                         "state": "running",
                     }
                 )
@@ -234,7 +316,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 else:
                     _append_check(checks, "graph_ready", "fail", "graph observation did not run")
                     result = "fail"
-    except (SchemaValidationError, ExecutionGuardError, LaunchError) as exc:
+    except (SchemaValidationError, ExecutionGuardError, LaunchError, MissingDigestError) as exc:
         _append_check(checks, "preflight", "fail", str(exc))
         result = "fail"
     except Exception as exc:  # noqa: BLE001 - evidence must capture unexpected failures
@@ -258,9 +340,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             checks=checks,
             ros_domain_id=ros_domain_id,
             stack_lock_sha256=_stack_lock_sha(),
-            infra_image_digest=_default_digest(),
+            infra_image_digest=infra_image_digest,
             signed=False,
-            business_repo=None,
+            business_repo=_resolve_business_repo(args),
         )
         try:
             validate_evidence(evidence)
@@ -268,10 +350,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             console.print(f"evidence schema warning: {exc}")
         write_json(evidence_path, evidence)
         console.print(f"evidence: {evidence_path}")
-        if result != "pass" or args.dry_run:
+        if result not in ("pass", "not_run") or args.dry_run:
             registry.clear()
 
-    return 0 if result == "pass" else 2
+    return 0 if result in ("pass", "not_run") else 2
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -331,6 +413,21 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--evidence", default="")
     run.add_argument("--run-id", required=True)
     run.add_argument("--dry-run", action="store_true")
+    run.add_argument(
+        "--business-repo-url",
+        default="",
+        help="Repo URL this run is testing on behalf of (else falls back to GITHUB_* env)",
+    )
+    run.add_argument(
+        "--business-repo-commit",
+        default="",
+        help="Commit SHA for --business-repo-url (else falls back to GITHUB_SHA)",
+    )
+    run.add_argument(
+        "--business-repo-dirty",
+        action="store_true",
+        help="Mark the business repo working tree as dirty in evidence",
+    )
     run.set_defaults(func=cmd_run)
 
     status = sub.add_parser("status")

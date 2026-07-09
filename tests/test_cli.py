@@ -157,6 +157,140 @@ def test_cli_graph_check_embedded_trusts_process_exit(
     )
 
 
+def test_cli_docker_compose_run_without_digest_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `docker_compose` run always launches a specific, real image.
+    Without `ROBOTICS_INFRA_IMAGE_DIGEST` there is no truthful digest to
+    record, so the harness must refuse to run rather than fabricate one.
+    """
+    evidence = tmp_path / "evidence.json"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("ROBOTICS_RUNS_ROOT", str(runs_root))
+    monkeypatch.delenv("ROBOTICS_INFRA_IMAGE_DIGEST", raising=False)
+
+    resolved = _resolve_generic_scenario(tmp_path, monkeypatch)
+    data = json.loads(resolved.read_text(encoding="utf-8"))
+    data["launch"] = {
+        "entrypoint": "docker_compose",
+        "package": "docker",
+        "file": "compose.yaml",
+        "arguments": ["run", "--rm", "simulation"],
+    }
+    resolved.write_text(json.dumps(data), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "robotics-harness",
+            "run",
+            "--scenario",
+            str(resolved),
+            "--evidence",
+            str(evidence),
+            "--run-id",
+            "test-run-missing-digest",
+        ],
+    )
+    assert main() == 2
+    evidence_data = json.loads(evidence.read_text(encoding="utf-8"))
+    assert evidence_data["result"] == "fail"
+    assert evidence_data["infra_image_digest"] == "sha256:" + "0" * 64
+    assert any(
+        check["name"] == "preflight" and "ROBOTICS_INFRA_IMAGE_DIGEST" in check.get("message", "")
+        for check in evidence_data["checks"]
+    )
+
+
+def test_cli_business_repo_populated_from_github_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("ROBOTICS_RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "mmkolpakov/droning-simulation-infra")
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+
+    resolved = _resolve_generic_scenario(tmp_path, monkeypatch)
+    data = json.loads(resolved.read_text(encoding="utf-8"))
+    data["launch"] = {
+        "entrypoint": "external_command",
+        "package": sys.executable,
+        "arguments": ["-c", "print('ok')"],
+    }
+    resolved.write_text(json.dumps(data), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "robotics-harness",
+            "run",
+            "--scenario",
+            str(resolved),
+            "--evidence",
+            str(evidence),
+            "--run-id",
+            "test-run-business-repo",
+            "--dry-run",
+        ],
+    )
+    assert main() == 0
+    evidence_data = json.loads(evidence.read_text(encoding="utf-8"))
+    assert evidence_data["business_repo"] == {
+        "url": "https://github.com/mmkolpakov/droning-simulation-infra",
+        "commit": "a" * 40,
+        "dirty": False,
+    }
+
+
+def test_cli_business_repo_explicit_flags_override_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("ROBOTICS_RUNS_ROOT", str(runs_root))
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "mmkolpakov/should-not-be-used")
+    monkeypatch.setenv("GITHUB_SHA", "b" * 40)
+
+    resolved = _resolve_generic_scenario(tmp_path, monkeypatch)
+    data = json.loads(resolved.read_text(encoding="utf-8"))
+    data["launch"] = {
+        "entrypoint": "external_command",
+        "package": sys.executable,
+        "arguments": ["-c", "print('ok')"],
+    }
+    resolved.write_text(json.dumps(data), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "robotics-harness",
+            "run",
+            "--scenario",
+            str(resolved),
+            "--evidence",
+            str(evidence),
+            "--run-id",
+            "test-run-business-repo-explicit",
+            "--dry-run",
+            "--business-repo-url",
+            "https://github.com/explicit/repo",
+            "--business-repo-commit",
+            "c" * 40,
+            "--business-repo-dirty",
+        ],
+    )
+    assert main() == 0
+    evidence_data = json.loads(evidence.read_text(encoding="utf-8"))
+    assert evidence_data["business_repo"] == {
+        "url": "https://github.com/explicit/repo",
+        "commit": "c" * 40,
+        "dirty": True,
+    }
+
+
 def test_cli_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     resolved = tmp_path / "resolved.json"
     evidence = tmp_path / "validation.json"
@@ -195,8 +329,14 @@ def test_cli_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert main() == 0
     data = json.loads(evidence.read_text(encoding="utf-8"))
-    assert data["result"] == "pass"
-    assert any(check["name"] == "dry_run" for check in data["checks"])
+    # A dry-run must never be schema-indistinguishable from a real passing
+    # release check: it never launched anything, so `result` must be
+    # `not_run`, not a fake `pass`.
+    assert data["result"] == "not_run"
+    assert any(
+        check["name"] == "process_execution" and check["result"] == "not_run"
+        for check in data["checks"]
+    )
     assert not any(
         check["name"] == "process_execution" and check["result"] == "executed"
         for check in data["checks"]
