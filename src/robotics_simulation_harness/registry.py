@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -37,17 +39,39 @@ def stop_registry_entry(entry: dict[str, Any]) -> None:
         try:
             os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:
-            return
-        deadline = time.time() + 10
-        while time.time() < deadline:
-            try:
-                os.killpg(pgid, 0)
-            except ProcessLookupError:
-                return
-            time.sleep(0.1)
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
+            pass
+        else:
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                try:
+                    os.killpg(pgid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(pgid, signal.SIGKILL)
     else:
-        os.kill(pid, signal.SIGTERM)
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGTERM)
+    _stop_compose_stack(entry)
+
+
+def _stop_compose_stack(entry: dict[str, Any]) -> None:
+    # `docker compose run`/`up` launch containers managed by the Docker
+    # daemon, not by the local process group: killing the local `docker
+    # compose` CLI (above) can leave containers, the compose network, and
+    # anonymous volumes running. `stop` must bring the stack down explicitly
+    # or a "stopped" run leaks resources that collide with the next run's
+    # ROS_DOMAIN_ID/network allocation.
+    if entry.get("entrypoint") != "docker_compose":
+        return
+    compose_file = entry.get("compose_file")
+    if not compose_file:
+        return
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans", "-t", "10"],
+            check=False,
+            timeout=30,
+        )

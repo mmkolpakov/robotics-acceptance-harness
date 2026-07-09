@@ -118,6 +118,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             result = "pass"
         else:
             plan = build_launch_plan(scenario)
+            compose_file = (
+                scenario["launch"].get("file") if plan.entrypoint == "docker_compose" else None
+            )
             coordinator = SignalCoordinator()
             runner = ProcessGroupRunner(coordinator)
             log_path = run_dir / "process.log"
@@ -141,6 +144,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                         "pgid": pgid,
                         "scenario_id": scenario["scenario_id"],
                         "command": plan.command,
+                        "entrypoint": plan.entrypoint,
+                        "compose_file": compose_file,
                         "state": "running",
                     }
                 )
@@ -177,6 +182,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                         "pid": runner.process.pid,
                         "scenario_id": scenario["scenario_id"],
                         "command": plan.command,
+                        "entrypoint": plan.entrypoint,
+                        "compose_file": compose_file,
                         "state": "exited",
                         "returncode": process.returncode,
                     }
