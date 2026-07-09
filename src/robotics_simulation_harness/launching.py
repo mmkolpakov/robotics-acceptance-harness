@@ -30,15 +30,21 @@ def build_launch_plan(scenario: dict[str, Any]) -> LaunchPlan:
     if entrypoint == "docker_compose":
         if not file_name:
             raise LaunchError("docker_compose launch requires file")
-        command = [
-            "docker",
-            "compose",
-            "-f",
-            file_name,
-            "up",
-            "--abort-on-container-exit",
-            *arguments,
-        ]
+        # Prefer explicit compose verbs from scenario arguments (run/up/...).
+        # Default to `up --abort-on-container-exit` only when arguments omit a verb.
+        compose_verbs = {"up", "run", "exec", "build", "pull", "config", "down", "ps", "logs"}
+        if arguments and arguments[0] in compose_verbs:
+            command = ["docker", "compose", "-f", file_name, *arguments]
+        else:
+            command = [
+                "docker",
+                "compose",
+                "-f",
+                file_name,
+                "up",
+                "--abort-on-container-exit",
+                *arguments,
+            ]
         return LaunchPlan(command=command, entrypoint=entrypoint)
 
     if entrypoint == "ros2_launch":

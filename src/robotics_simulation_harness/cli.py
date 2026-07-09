@@ -102,7 +102,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     checks: list[dict[str, str]] = []
     result = "error"
     scenario: dict[str, Any] = {}
-    ros_domain_id = _allocate_domain_id(run_id)
+    env_domain = os.environ.get("ROS_DOMAIN_ID")
+    if env_domain:
+        ros_domain_id = int(env_domain)
+    else:
+        ros_domain_id = _allocate_domain_id(run_id)
     registry = ProcessRegistry(registry_path(run_id, runs_root))
 
     try:
