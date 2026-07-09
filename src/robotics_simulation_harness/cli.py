@@ -121,7 +121,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             coordinator = SignalCoordinator()
             runner = ProcessGroupRunner(coordinator)
             log_path = run_dir / "process.log"
-            process = runner.run(
+            runner.start(
                 plan.command,
                 cwd=Path.cwd(),
                 wall_timeout_sec=int(scenario["simulation"]["wall_timeout_sec"]),
@@ -141,9 +141,23 @@ def cmd_run(args: argparse.Namespace) -> int:
                         "pgid": pgid,
                         "scenario_id": scenario["scenario_id"],
                         "command": plan.command,
-                        "state": "exited",
+                        "state": "running",
                     }
                 )
+            process = runner.wait()
+            if runner.process is not None:
+                entry = registry.read() or {}
+                entry.update(
+                    {
+                        "run_id": run_id,
+                        "pid": runner.process.pid,
+                        "scenario_id": scenario["scenario_id"],
+                        "command": plan.command,
+                        "state": "exited",
+                        "returncode": process.returncode,
+                    }
+                )
+                registry.write(entry)
             _append_check(checks, "process_execution", "executed")
             if process.timed_out:
                 _append_check(checks, "process_timeout", "fail", "wall timeout exceeded")

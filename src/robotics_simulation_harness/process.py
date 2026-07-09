@@ -9,6 +9,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 from .signal_coordinator import SignalCoordinator
 
@@ -25,16 +26,22 @@ class ProcessGroupRunner:
         self.process: subprocess.Popen[str] | None = None
         self.coordinator = coordinator or SignalCoordinator()
         self.log_path: Path | None = None
+        self._lines: queue.Queue[str | None] | None = None
+        self._reader: threading.Thread | None = None
+        self._log_handle: TextIO | None = None
+        self._started: float | None = None
+        self._wall_timeout_sec: int = 0
 
-    def run(
+    def start(
         self,
         command: Sequence[str],
         *,
         cwd: Path | None = None,
         wall_timeout_sec: int,
         log_path: Path | None = None,
-    ) -> ProcessResult:
+    ) -> subprocess.Popen[str]:
         self.log_path = log_path
+        self._wall_timeout_sec = wall_timeout_sec
         kwargs: dict[str, object] = {
             "cwd": cwd,
             "text": True,
@@ -52,35 +59,43 @@ class ProcessGroupRunner:
         self.coordinator.register(self.terminate_tree)
         self.coordinator.install()
 
-        lines: queue.Queue[str | None] = queue.Queue()
+        self._lines = queue.Queue()
 
         def reader() -> None:
             assert self.process is not None
             assert self.process.stdout is not None
+            assert self._lines is not None
             for line in self.process.stdout:
-                lines.put(line)
-            lines.put(None)
+                self._lines.put(line)
+            self._lines.put(None)
 
-        thread = threading.Thread(target=reader, daemon=True)
-        thread.start()
-        started = time.monotonic()
+        self._reader = threading.Thread(target=reader, daemon=True)
+        self._reader.start()
+        self._started = time.monotonic()
+        self._log_handle = log_path.open("w", encoding="utf-8") if log_path else None
+        return self.process
+
+    def wait(self) -> ProcessResult:
+        if self.process is None or self._lines is None or self._started is None:
+            raise RuntimeError("process was not started")
+
         timed_out = False
         stopped_by_signal = False
-        log_handle = log_path.open("w", encoding="utf-8") if log_path else None
+        log_handle = self._log_handle
         try:
             while True:
                 if self.coordinator.stopped:
                     stopped_by_signal = True
                     self.terminate_tree()
                     break
-                if time.monotonic() - started >= wall_timeout_sec:
+                if time.monotonic() - self._started >= self._wall_timeout_sec:
                     timed_out = True
                     self.terminate_tree()
                     break
                 try:
-                    item = lines.get(timeout=0.2)
+                    item = self._lines.get(timeout=0.2)
                 except queue.Empty:
-                    if self.process.poll() is not None and lines.empty():
+                    if self.process.poll() is not None and self._lines.empty():
                         break
                     continue
                 if item is None:
@@ -96,13 +111,30 @@ class ProcessGroupRunner:
         finally:
             if log_handle is not None:
                 log_handle.close()
-            thread.join(timeout=1)
+            if self._reader is not None:
+                self._reader.join(timeout=1)
 
         return ProcessResult(
             returncode=returncode,
             timed_out=timed_out,
             stopped_by_signal=stopped_by_signal,
         )
+
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        wall_timeout_sec: int,
+        log_path: Path | None = None,
+    ) -> ProcessResult:
+        self.start(
+            command,
+            cwd=cwd,
+            wall_timeout_sec=wall_timeout_sec,
+            log_path=log_path,
+        )
+        return self.wait()
 
     def terminate_tree(self) -> None:
         if self.process is None or self.process.poll() is not None:
