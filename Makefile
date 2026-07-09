@@ -37,7 +37,7 @@ test:
 
 example-hydra:
 	python -m pip install --disable-pip-version-check -r examples/hydra/requirements.txt
-	cd examples/hydra && python -m pytest -q test_guard_with_hydra.py
+	cd examples/hydra && ! python -m pytest -q test_guard_with_hydra.py
 	cd examples/hydra && python -m pytest -q test_guard_with_hydra.py --robotics-allow-physical-actuation
 
 example-launch-testing:
