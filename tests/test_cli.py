@@ -118,9 +118,9 @@ def test_cli_skip_observer_is_fail_closed(tmp_path: Path, monkeypatch: pytest.Mo
     )
 
 
-def test_cli_graph_check_embedded_trusts_process_exit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _run_embedded_graph_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, run_id: str
+) -> Path:
     evidence = tmp_path / "evidence.json"
     runs_root = tmp_path / "runs"
     monkeypatch.setenv("ROBOTICS_RUNS_ROOT", str(runs_root))
@@ -145,14 +145,63 @@ def test_cli_graph_check_embedded_trusts_process_exit(
             "--evidence",
             str(evidence),
             "--run-id",
-            "test-run-embedded",
+            run_id,
         ],
     )
-    assert main() == 0
+    main()
+    return evidence
+
+
+def test_cli_graph_check_embedded_reads_observed_file_and_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed_path = tmp_path / "graph-observed.json"
+    observed_path.write_text(
+        json.dumps({"ok": True, "message": "graph ready", "observed": {}}), encoding="utf-8"
+    )
+    monkeypatch.setenv("ROBOTICS_GRAPH_OBSERVED_PATH", str(observed_path))
+
+    evidence = _run_embedded_graph_check(tmp_path, monkeypatch, run_id="test-run-embedded-pass")
     evidence_data = json.loads(evidence.read_text(encoding="utf-8"))
     assert evidence_data["result"] == "pass"
     assert any(
         check["name"] == "graph_ready" and check["result"] == "pass"
+        for check in evidence_data["checks"]
+    )
+    assert any(artifact["name"] == "graph-observed" for artifact in evidence_data["artifacts"])
+
+
+def test_cli_graph_check_embedded_fails_when_observer_reports_not_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed_path = tmp_path / "graph-observed.json"
+    observed_path.write_text(
+        json.dumps({"ok": False, "message": "topic readiness failed for /clock"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ROBOTICS_GRAPH_OBSERVED_PATH", str(observed_path))
+
+    evidence = _run_embedded_graph_check(tmp_path, monkeypatch, run_id="test-run-embedded-fail")
+    evidence_data = json.loads(evidence.read_text(encoding="utf-8"))
+    assert evidence_data["result"] == "fail"
+    assert any(
+        check["name"] == "graph_ready"
+        and check["result"] == "fail"
+        and "topic readiness failed" in check.get("message", "")
+        for check in evidence_data["checks"]
+    )
+
+
+def test_cli_graph_check_embedded_fails_closed_when_result_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ROBOTICS_GRAPH_OBSERVED_PATH", str(tmp_path / "does-not-exist.json"))
+
+    evidence = _run_embedded_graph_check(tmp_path, monkeypatch, run_id="test-run-embedded-missing")
+    evidence_data = json.loads(evidence.read_text(encoding="utf-8"))
+    assert evidence_data["result"] == "fail"
+    assert any(
+        check["name"] == "graph_ready" and check["result"] == "fail"
         for check in evidence_data["checks"]
     )
 

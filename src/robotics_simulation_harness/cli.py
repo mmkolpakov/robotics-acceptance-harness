@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import platform
 from pathlib import Path
@@ -154,6 +155,43 @@ def _compose_env_snapshot() -> dict[str, str]:
     return {key: os.environ[key] for key in _COMPOSE_ENV_KEYS if key in os.environ}
 
 
+def _check_embedded_graph_result(
+    extra_artifacts: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """Read the embedded in-network observer's result file from disk.
+
+    `ROBOTICS_GRAPH_CHECK_EMBEDDED=1` means a sibling process/container
+    already performed the live rclpy graph check and wrote its verdict to
+    `ROBOTICS_GRAPH_OBSERVED_PATH`. Trusting the launch command's exit code
+    alone would also pass if that sibling silently never ran (or crashed
+    before writing anything); this must fail closed on any of those cases
+    instead of ever inferring `graph_ready: pass` from process_exit alone.
+    """
+    observed_path_str = os.environ.get("ROBOTICS_GRAPH_OBSERVED_PATH")
+    if not observed_path_str:
+        return "fail", "ROBOTICS_GRAPH_CHECK_EMBEDDED=1 requires ROBOTICS_GRAPH_OBSERVED_PATH"
+    observed_path = Path(observed_path_str)
+    if not observed_path.is_file():
+        return "fail", f"embedded observer result missing: {observed_path}"
+    try:
+        observed_sha = file_sha256(observed_path)
+        observed = json.loads(observed_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return "fail", f"embedded observer result unreadable: {exc}"
+    extra_artifacts.append(
+        {
+            "name": "graph-observed",
+            "uri": str(observed_path),
+            "sha256": observed_sha,
+            "bytes": observed_path.stat().st_size,
+        }
+    )
+    message = str(observed.get("message", "")) or "embedded observer result"
+    if observed.get("ok") is True:
+        return "pass", f"{message} (graph-observed sha256={observed_sha})"
+    return "fail", f"{message} (graph-observed sha256={observed_sha})"
+
+
 def _append_check(checks: list[dict[str, str]], name: str, result: str, message: str = "") -> None:
     item = {"name": name, "result": result}
     if message:
@@ -172,6 +210,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         evidence_path = run_dir / "evidence-manifest.json"
     checks: list[dict[str, str]] = []
+    extra_artifacts: list[dict[str, Any]] = []
     result = "error"
     scenario: dict[str, Any] = {}
     infra_image_digest = _NO_IMAGE_DIGEST_SENTINEL
@@ -289,19 +328,18 @@ def cmd_run(args: argparse.Namespace) -> int:
             else:
                 _append_check(checks, "process_exit", "pass")
                 if graph_check_embedded:
-                    # The launch plan itself enforces graph readiness (for
+                    # The launch plan itself runs a sibling container (for
                     # example: `docker compose up --exit-code-from
-                    # ros-observer`, where a sibling container performs a live
-                    # rclpy check on the same network). `process_exit` above
-                    # already reflects that outcome, so it is reported here
-                    # honestly instead of re-declaring an independent "pass".
-                    _append_check(
-                        checks,
-                        "graph_ready",
-                        "pass",
-                        "verified by embedded in-network observer; derived from process exit",
-                    )
-                    result = "pass"
+                    # ros-observer`) that performs a live rclpy check on the
+                    # same network and writes its verdict to a result file.
+                    # `process_exit == 0` on its own is not proof the graph
+                    # was actually ready -- e.g. a race where the sibling
+                    # never ran -- so this reads that file from disk and only
+                    # passes when it explicitly says `ok: true`, recording
+                    # its sha256 in evidence for auditability.
+                    outcome, message = _check_embedded_graph_result(extra_artifacts)
+                    _append_check(checks, "graph_ready", outcome, message)
+                    result = outcome
                 elif skip_observer:
                     # A skipped check must never be reported as a passing
                     # release/cross-repo check. Fail closed instead of lying.
@@ -343,6 +381,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             infra_image_digest=infra_image_digest,
             signed=False,
             business_repo=_resolve_business_repo(args),
+            extra_artifacts=extra_artifacts or None,
         )
         try:
             validate_evidence(evidence)
