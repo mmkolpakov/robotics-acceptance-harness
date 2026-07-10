@@ -1,72 +1,42 @@
 # robotics-simulation-harness
 
-A `pytest` plugin providing one thing: a simulation-only **execution guard**
-for robotics test suites. Scenario resolution/composition is `Hydra`'s job,
-process/container lifecycle is `pytest-docker`'s, ROS graph readiness is
-`launch_testing_ros`'s, and evidence is `pytest --junitxml` plus SLSA
-Provenance -- all adopted directly by the consuming test suite. This
-repository owns only the execution guard itself.
+Small pytest plugin that accepts one resolved robotics scenario, validates it
+against `acceptance-scenario.v1`, and permits test collection only for
+`target_environment: simulation`.
 
-The repository is domain-neutral. It does not contain product scenarios, robot
-descriptions, scene layouts, trained models, or private acceptance data.
+The repository does not compose scenarios, start processes or containers,
+interpret simulator logs, or manage artifacts. Those responsibilities stay in
+the consuming project and its standard test tooling.
 
-## Baseline
+## Toolchain
 
-| Tool | Version |
+| Component | Version |
 | --- | --- |
-| Package | 0.3.0 |
-| Python | 3.10+ locally, 3.12 in CI |
-| pytest | 9.0.2 |
-| pytest-docker | 3.2.5 |
-| ruff | 0.15.0 |
-| yamllint | 1.38.0 |
-| hydra-core (example) | 1.3.4 |
-| omegaconf (example) | 2.3.1 |
+| Python | 3.12 |
+| Package | 0.4.0 |
+| robotics-runtime-contracts | 0.3.x |
+| uv | 0.11.28 |
+| pytest | 9.1.1 |
+| PyYAML | 6.0.x |
+| ruff | 0.15.21 |
 
-## Quickstart
+## Use
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install -e . -r requirements-dev.txt
-make ci
-```
-
-## Using the plugin
-
-Installing this package registers a `pytest11` plugin
-(`robotics-execution-guard`) automatically -- no `-p` flag needed. It adds:
-
-- A `robotics_scenario` fixture. Override it (per test, class, or module) to
-  return a mapping with `target_environment` and
-  `safety.execution_guard.allow_physical_actuation` -- typically composed
-  with Hydra: `OmegaConf.to_container(cfg, resolve=True)["scenario"]`.
-- An autouse `robotics_execution_guard` fixture that calls
-  `enforce_execution_guard(robotics_scenario)` before every test and fails
-  the test (as a setup error, fail-closed) unless the scenario is
-  `target_environment: simulation` with `allow_physical_actuation: false`.
-- A `robotics_physical_actuation` marker and a
-  `--robotics-allow-physical-actuation` CLI flag. A test that legitimately
-  needs to target real hardware must carry **both** the marker and the flag
-  must be passed on the command line; either alone still fails closed.
-
-See `examples/hydra/test_guard_with_hydra.py` for a full Hydra
-compose-API integration, and `examples/launch_testing/test_clock_graph_ready.py`
-for the standard `launch_testing_ros.WaitForTopics` graph-readiness pattern.
-
-## Main commands
+Pass a fully resolved YAML file to pytest:
 
 ```bash
-make validate            # yamllint
-make lint                # ruff
-make test                # full test suite, writes artifacts/reports/results.xml
-make test-unit           # tests/unit only (fast, no subprocess pytest)
-make test-integration    # tests/integration only (pytester-based)
-make example-hydra       # Hydra-composed-scenario example (needs hydra-core/omegaconf)
-make example-launch-testing  # launch_testing_ros example (needs a ROS 2 Jazzy environment)
-make ci                   # validate + lint + test
+uv run pytest --robotics-scenario path/to/resolved-scenario.yaml
 ```
 
-CI additionally hashes `results.xml` and calls
-`slsa-framework/slsa-github-generator`'s generic workflow to produce a
-signed SLSA Provenance attestation for the test report.
+The session stops before collecting tests when the option is absent, the file
+is invalid, or its target is not `simulation`. The `robotics_scenario` fixture
+exposes the validated scenario as a deeply immutable mapping.
+
+## Development
+
+```bash
+uv sync --locked
+uv run pre-commit run --all-files
+uv run pytest --robotics-scenario tests/fixtures/simulation.yaml
+uv build
+```

@@ -19,102 +19,40 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    outputs:
-      hashes: ${{ steps.hash.outputs.hashes }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           persist-credentials: false
-      # A `--system-site-packages` venv on the runner's system Python 3.12
-      # (matching apt-installed rclpy's interpreter) makes rclpy importable
-      # without cross-interpreter ABI guesswork, while keeping pip installs
-      # isolated from the system environment.
-      - name: Install ROS 2 Jazzy rclpy for the launch_testing_ros example
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Synchronize locked environment
+        run: uv sync --locked --all-groups
+      - name: Run repository checks
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+      - name: Run plugin tests
         run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y curl gnupg lsb-release
-          sudo curl -sSL -o /usr/share/keyrings/ros-archive-keyring.gpg \
-            https://raw.githubusercontent.com/ros/rosdistro/master/ros.key
-          arch="$(dpkg --print-architecture)"
-          codename="$(lsb_release -cs)"
-          keyring=/usr/share/keyrings/ros-archive-keyring.gpg
-          repo_url="http://packages.ros.org/ros2/ubuntu"
-          echo "deb [arch=${arch} signed-by=${keyring}] ${repo_url} ${codename} main" \
-            | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ros-jazzy-ros-base
-      - name: Install package and tools
+          mkdir -p artifacts
+          uv run pytest \
+            --robotics-scenario tests/fixtures/simulation.yaml \
+            --junitxml=artifacts/junit.xml
+      - name: Build wheel and source distribution
+        run: uv build --out-dir artifacts/dist
+      - name: Verify installed wheel
         run: |
-          source /opt/ros/jazzy/setup.bash
-          python3 -m venv --system-site-packages .venv
-          source .venv/bin/activate
-          python -m pip install --disable-pip-version-check -e . -r requirements-dev.txt
-          python -m pip install --disable-pip-version-check -r examples/hydra/requirements.txt
-      - name: Validate + lint
-        run: |
-          source .venv/bin/activate
-          make validate lint
-      - name: Plugin unit/integration tests (JUnit)
-        run: |
-          source .venv/bin/activate
-          make test
-      - name: Hydra scenario-composition example
-        run: |
-          source .venv/bin/activate
-          make example-hydra
-      - name: launch_testing_ros example
-        run: |
-          source /opt/ros/jazzy/setup.bash
-          source .venv/bin/activate
-          python -c "import rclpy; print('rclpy ok:', rclpy.__file__)"
-          make example-launch-testing
-      - name: Hash JUnit report for SLSA provenance
-        id: hash
-        run: |
-          set -euo pipefail
-          cd artifacts/reports
-          echo "hashes=$(sha256sum results.xml | base64 -w0)" >> "${GITHUB_OUTPUT}"
-      - name: Upload JUnit report
+          uv venv --python 3.12 .wheel-venv
+          uv pip install --python .wheel-venv/bin/python \
+            https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.3.0/robotics_runtime_contracts-0.3.0-py3-none-any.whl \
+            artifacts/dist/*.whl
+          .wheel-venv/bin/pytest --help | grep -- --robotics-scenario
+      - name: Upload validation artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: junit-results
-          path: artifacts/reports/results.xml
-
-  provenance:
-    needs: [test]
-    permissions:
-      actions: read  # Needed for detection of GitHub Actions environment.
-      id-token: write  # Needed for provenance signing.
-      contents: write  # Needed to upload provenance to a release, if any.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
-    with:
-      base64-subjects: "${{ needs.test.outputs.hashes }}"
-      provenance-name: results.xml.intoto.jsonl
-
-  notify-infra:
-    needs: [test, provenance]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    if: >-
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' ||
-      github.ref == 'refs/heads/foundation-ready-v0.2')
-    steps:
-      - name: Notify infra cross-repo gate
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-        run: |
-          if [[ -z "${GH_TOKEN}" ]]; then
-            echo "CROSS_REPO_TOKEN missing; skip repository_dispatch"
-            exit 0
-          fi
-          gh api \
-            --method POST \
-            repos/mmkolpakov/droning-simulation-infra/dispatches \
-            -f event_type=harness-ci-success \
-            -f client_payload[sha]="${GITHUB_SHA}"
-          echo "repository_dispatch harness-ci-success sent"
+          name: harness-validation-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
