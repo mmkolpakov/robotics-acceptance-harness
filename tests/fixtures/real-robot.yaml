@@ -1,0 +1,14 @@
+schema_version: acceptance-scenario.v1
+scenario_id: harness.real-robot-rejected
+target_environment: real_robot
+seed: 1
+timeouts:
+  startup_sec: 30
+  graph_ready_sec: 20
+  execution_sec: 60
+  shutdown_sec: 10
+expected_ros_graph:
+  stable_for_sec: 2
+  topics: []
+  services: []
+  actions: []

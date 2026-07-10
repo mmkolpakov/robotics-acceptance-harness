@@ -1,5 +1,0 @@
----
-target_environment: simulation
-safety:
-  execution_guard:
-    allow_physical_actuation: false

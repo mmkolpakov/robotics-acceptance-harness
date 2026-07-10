@@ -4,36 +4,38 @@ build-backend = "hatchling.build"
 
 [project]
 name = "robotics-simulation-harness"
-version = "0.3.0"
-description = "pytest plugin: simulation-only execution guard for robotics test suites."
-requires-python = ">=3.10"
+version = "0.4.0"
+description = "Pytest plugin for validated, simulation-only robotics scenarios."
+requires-python = ">=3.12,<3.14"
 readme = "README.md"
 license = "MIT"
 dependencies = [
   "pytest>=8,<10",
+  "pyyaml>=6.0.2,<7",
+  "robotics-runtime-contracts>=0.3,<0.4",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-  "pytest==9.0.2",
-  "pytest-docker==3.2.5",
-  "ruff==0.15.0",
+  "pre-commit==4.6.0",
+  "pytest==9.1.1",
+  "ruff==0.15.21",
   "yamllint==1.38.0",
 ]
 
+[tool.uv.sources]
+robotics-runtime-contracts = { git = "https://github.com/mmkolpakov/robotics-runtime-contracts.git", tag = "v0.3.0" }
+
 [project.entry-points.pytest11]
-robotics-execution-guard = "robotics_simulation_harness.guard"
+robotics-simulation-harness = "robotics_simulation_harness.plugin"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
-markers = [
-  "integration: exercises the plugin via a nested pytest run (slower than tests/unit)",
-]
+addopts = ["--strict-config", "--strict-markers"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
