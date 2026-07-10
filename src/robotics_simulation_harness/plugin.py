@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 import yaml
-
 from robotics_runtime_contracts import ScenarioValidationError, validate_scenario
 
 _SCENARIO_KEY = pytest.StashKey[Mapping[str, Any]]()

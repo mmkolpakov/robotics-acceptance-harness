@@ -7,8 +7,19 @@ import pytest
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def make_test(pytester: pytest.Pytester) -> None:
-    pytester.makepyfile(
+def run_isolated(pytester: pytest.Pytester, *args: str) -> pytest.RunResult:
+    config = pytester.makeini("[pytest]\n")
+    return pytester.runpytest(
+        "-c",
+        str(config),
+        "--rootdir",
+        str(pytester.path),
+        *args,
+    )
+
+
+def make_test(pytester: pytest.Pytester) -> Path:
+    return pytester.makepyfile(
         """
         def test_scenario_is_available(robotics_scenario):
             assert robotics_scenario["scenario_id"]
@@ -20,8 +31,10 @@ def run_with_fixture(
     pytester: pytest.Pytester,
     fixture_name: str,
 ) -> pytest.RunResult:
-    make_test(pytester)
-    return pytester.runpytest(
+    test_file = make_test(pytester)
+    return run_isolated(
+        pytester,
+        test_file.name,
         "--robotics-scenario",
         str(FIXTURES / fixture_name),
     )
@@ -44,24 +57,29 @@ def test_non_simulation_target_stops_before_test_body(
 
 
 def test_missing_scenario_option_is_a_usage_error(pytester: pytest.Pytester) -> None:
-    make_test(pytester)
-    result = pytester.runpytest()
+    test_file = make_test(pytester)
+    result = run_isolated(pytester, test_file.name)
 
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines(["*--robotics-scenario PATH is required*"])
 
 
 def test_malformed_yaml_is_a_usage_error(pytester: pytest.Pytester) -> None:
-    make_test(pytester)
+    test_file = make_test(pytester)
     scenario = pytester.makefile(".yaml", scenario="expected_ros_graph: [")
-    result = pytester.runpytest("--robotics-scenario", str(scenario))
+    result = run_isolated(
+        pytester,
+        test_file.name,
+        "--robotics-scenario",
+        str(scenario),
+    )
 
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines(["*cannot parse robotics scenario*"])
 
 
 def test_invalid_contract_reports_json_path(pytester: pytest.Pytester) -> None:
-    make_test(pytester)
+    test_file = make_test(pytester)
     scenario = pytester.makefile(
         ".yaml",
         scenario="""
@@ -81,14 +99,19 @@ def test_invalid_contract_reports_json_path(pytester: pytest.Pytester) -> None:
           actions: []
         """,
     )
-    result = pytester.runpytest("--robotics-scenario", str(scenario))
+    result = run_isolated(
+        pytester,
+        test_file.name,
+        "--robotics-scenario",
+        str(scenario),
+    )
 
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines(["*$.target_environment:*"])
 
 
 def test_scenario_fixture_is_deeply_immutable(pytester: pytest.Pytester) -> None:
-    pytester.makepyfile(
+    test_file = pytester.makepyfile(
         """
         import pytest
 
@@ -99,7 +122,9 @@ def test_scenario_fixture_is_deeply_immutable(pytester: pytest.Pytester) -> None
                 robotics_scenario["timeouts"]["startup_sec"] = 2
         """
     )
-    result = pytester.runpytest(
+    result = run_isolated(
+        pytester,
+        test_file.name,
         "--robotics-scenario",
         str(FIXTURES / "simulation.yaml"),
     )
@@ -107,7 +132,7 @@ def test_scenario_fixture_is_deeply_immutable(pytester: pytest.Pytester) -> None
 
 
 def test_help_has_no_physical_execution_bypass(pytester: pytest.Pytester) -> None:
-    result = pytester.runpytest("--help")
+    result = run_isolated(pytester, "--help")
 
     assert result.ret == pytest.ExitCode.OK
     result.stdout.fnmatch_lines(["*--robotics-scenario=PATH*"])
