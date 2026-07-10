@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 REPORT_DIR ?= artifacts/reports
 JUNIT_XML ?= $(REPORT_DIR)/results.xml
 
-.PHONY: help quickstart doctor validate lint test example-hydra example-launch-testing pre-commit ci clean
+.PHONY: help quickstart doctor validate lint test test-unit test-integration example-hydra example-launch-testing pre-commit ci clean
 
 help:
 	@printf '%s\n' \
@@ -12,7 +12,9 @@ help:
 		'doctor               print tool versions' \
 		'validate             yamllint' \
 		'lint                 ruff' \
-		'test                 run the plugin unit/integration tests' \
+		'test                 run the full plugin test suite, writes JUnit XML' \
+		'test-unit            run only tests/unit (fast, no subprocess pytest)' \
+		'test-integration     run only tests/integration (pytester-based)' \
 		'example-hydra        run the Hydra-composed-scenario example' \
 		'example-launch-testing  run the launch_testing_ros example (needs ROS 2 Jazzy)' \
 		'ci                   run validate, lint, test, junitxml'
@@ -34,6 +36,12 @@ lint:
 test:
 	mkdir -p "$(REPORT_DIR)"
 	python -m pytest --junitxml="$(JUNIT_XML)"
+
+test-unit:
+	python -m pytest tests/unit -q
+
+test-integration:
+	python -m pytest tests/integration -q
 
 example-hydra:
 	python -m pip install --disable-pip-version-check -r examples/hydra/requirements.txt

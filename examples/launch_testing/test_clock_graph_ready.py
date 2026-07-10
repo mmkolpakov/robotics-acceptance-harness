@@ -1,8 +1,8 @@
-"""Example: `launch_testing_ros.WaitForTopics` replaces the old bespoke ROS
-graph poller. This starts the smallest possible real (non-simulated) ROS 2
-graph -- the clock publisher fixture in `examples/hydra/../rclpy_clock_publisher.py`
-sibling directory -- and waits for it with the upstream helper instead of a
-hand-rolled `count_publishers` loop.
+"""Example: wait for a real ROS 2 graph to become ready with
+`launch_testing_ros.WaitForTopics`. This starts the smallest possible real
+(non-simulated) ROS 2 graph -- the clock publisher fixture in
+`examples/generic/rclpy_clock_publisher.py` -- and waits for it with the
+upstream helper.
 
 Run inside a ROS 2 Jazzy environment with:
     source /opt/ros/jazzy/setup.bash

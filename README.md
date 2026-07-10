@@ -1,21 +1,11 @@
 # robotics-simulation-harness
 
 A `pytest` plugin providing one thing: a simulation-only **execution guard**
-for robotics test suites. Everything this repository used to do by hand
-(scenario resolution/composition, process supervision, ROS graph polling,
-evidence writing and signing) is now the job of an industry-standard tool,
-adopted directly by the consuming test suite instead of re-implemented here:
-
-| Old harness responsibility | Standard replacement |
-| --- | --- |
-| `cli.py` scenario runner | `pytest` itself |
-| `process.py` process-group supervision | `pytest-docker` (container lifecycle) |
-| `registry.py` PID files | Docker/pytest-docker process isolation |
-| `signal_coordinator.py` SIGTERM/SIGINT handling | native `pytest` + Docker signal handling |
-| `resolver.py` YAML composition/patching | `Hydra` (OmegaConf) config groups and overlays |
-| `ros_observer.py` ROS graph polling | `launch_testing_ros.WaitForTopics` |
-| `evidence.py` custom evidence JSON + Cosign signing | `pytest --junitxml` + SLSA Provenance (`slsa-github-generator`) |
-| `guard.py` execution guard | **kept** -- rewritten as this `pytest` plugin |
+for robotics test suites. Scenario resolution/composition is `Hydra`'s job,
+process/container lifecycle is `pytest-docker`'s, ROS graph readiness is
+`launch_testing_ros`'s, and evidence is `pytest --junitxml` plus SLSA
+Provenance -- all adopted directly by the consuming test suite. This
+repository owns only the execution guard itself.
 
 The repository is domain-neutral. It does not contain product scenarios, robot
 descriptions, scene layouts, trained models, or private acceptance data.
@@ -62,15 +52,16 @@ Installing this package registers a `pytest11` plugin
 
 See `examples/hydra/test_guard_with_hydra.py` for a full Hydra
 compose-API integration, and `examples/launch_testing/test_clock_graph_ready.py`
-for the standard `launch_testing_ros.WaitForTopics` pattern that replaced the
-old bespoke ROS graph poller.
+for the standard `launch_testing_ros.WaitForTopics` graph-readiness pattern.
 
 ## Main commands
 
 ```bash
 make validate            # yamllint
 make lint                # ruff
-make test                # plugin unit/integration tests, writes artifacts/reports/results.xml
+make test                # full test suite, writes artifacts/reports/results.xml
+make test-unit           # tests/unit only (fast, no subprocess pytest)
+make test-integration    # tests/integration only (pytester-based)
 make example-hydra       # Hydra-composed-scenario example (needs hydra-core/omegaconf)
 make example-launch-testing  # launch_testing_ros example (needs a ROS 2 Jazzy environment)
 make ci                   # validate + lint + test
@@ -78,6 +69,4 @@ make ci                   # validate + lint + test
 
 CI additionally hashes `results.xml` and calls
 `slsa-framework/slsa-github-generator`'s generic workflow to produce a
-signed SLSA Provenance attestation for the test report -- the de-facto 2026
-evidence standard, replacing the old repository-local Cosign-signed
-`evidence-manifest.json`.
+signed SLSA Provenance attestation for the test report.

@@ -1,12 +1,7 @@
-"""Execution guard: the one piece of the old harness that is genuine
-business/safety logic rather than DevOps orchestration self-rolled.
+"""Simulation-only execution guard, exposed as a `pytest` plugin.
 
-Everything else the harness used to do (scenario resolution, process
-supervision, ROS graph polling, evidence writing) is now the job of
-`Hydra`, `pytest-docker`, `launch_testing_ros`, and `pytest --junitxml` +
-`slsa-github-generator` respectively. This module survives as a `pytest`
-plugin: an autouse fixture that fails a test closed against physical
-actuation unless it explicitly opts in.
+An autouse fixture fails a test closed against physical actuation unless it
+explicitly opts in via both a marker and a CLI flag.
 """
 
 from __future__ import annotations

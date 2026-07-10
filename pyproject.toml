@@ -27,6 +27,9 @@ robotics-execution-guard = "robotics_simulation_harness.guard"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "integration: exercises the plugin via a nested pytest run (slower than tests/unit)",
+]
 
 [tool.ruff]
 line-length = 100
