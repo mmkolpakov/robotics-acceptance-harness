@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "enabledManagers": [
+    "github-actions",
+    "pep621",
+    "pre-commit"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 4am on monday"
+    ]
+  },
+  "automerge": false
+}

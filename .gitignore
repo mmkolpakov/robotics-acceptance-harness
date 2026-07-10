@@ -1,11 +1,17 @@
 .venv/
+.wheel-venv/
+build/
+dist/
 .pytest_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 __pycache__/
 *.py[cod]
 artifacts/
 runs/
 tmp/
+*.egg-info/
 .env
 .env.*
 !.env.example
