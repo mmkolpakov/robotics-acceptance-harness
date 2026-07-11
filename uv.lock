@@ -234,16 +234,8 @@ wheels = [
 ]
 
 [[package]]
-name = "robotics-runtime-contracts"
-version = "0.3.0"
-source = { git = "https://github.com/mmkolpakov/robotics-runtime-contracts.git?tag=v0.3.0#eb54c779e107ddcb72bbf56a1f8c60d04b5208bc" }
-dependencies = [
-    { name = "jsonschema" },
-]
-
-[[package]]
-name = "robotics-simulation-harness"
-version = "0.4.0"
+name = "robotics-acceptance-harness"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "pytest" },
@@ -263,7 +255,7 @@ dev = [
 requires-dist = [
     { name = "pytest", specifier = ">=8,<10" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
-    { name = "robotics-runtime-contracts", git = "https://github.com/mmkolpakov/robotics-runtime-contracts.git?tag=v0.3.0" },
+    { name = "robotics-runtime-contracts", url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.0/robotics_runtime_contracts-0.4.0-py3-none-any.whl" },
 ]
 
 [package.metadata.requires-dev]
@@ -273,6 +265,20 @@ dev = [
     { name = "ruff", specifier = "==0.15.21" },
     { name = "yamllint", specifier = "==1.38.0" },
 ]
+
+[[package]]
+name = "robotics-runtime-contracts"
+version = "0.4.0"
+source = { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.0/robotics_runtime_contracts-0.4.0-py3-none-any.whl" }
+dependencies = [
+    { name = "jsonschema" },
+]
+wheels = [
+    { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.0/robotics_runtime_contracts-0.4.0-py3-none-any.whl", hash = "sha256:49c5f9eaf5902902ea6fe6729a0519a39e24253e2beecc1ba0c6e6d6c96154bd" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "jsonschema", specifier = ">=4.26,<5" }]
 
 [[package]]
 name = "rpds-py"

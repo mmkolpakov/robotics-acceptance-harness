@@ -2,17 +2,20 @@
 requires = ["hatchling==1.29.0"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project]
-name = "robotics-simulation-harness"
-version = "0.4.0"
-description = "Pytest plugin for validated, simulation-only robotics scenarios."
+name = "robotics-acceptance-harness"
+version = "0.5.0"
+description = "Attach-only acceptance observer for validated robotics executions."
 requires-python = ">=3.12,<3.14"
 readme = "README.md"
 license = "MIT"
 dependencies = [
   "pytest>=8,<10",
   "pyyaml>=6.0.2,<7",
-  "robotics-runtime-contracts>=0.3,<0.4",
+  "robotics-runtime-contracts @ https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.0/robotics_runtime_contracts-0.4.0-py3-none-any.whl",
 ]
 
 [dependency-groups]
@@ -23,11 +26,8 @@ dev = [
   "yamllint==1.38.0",
 ]
 
-[tool.uv.sources]
-robotics-runtime-contracts = { git = "https://github.com/mmkolpakov/robotics-runtime-contracts.git", tag = "v0.3.0" }
-
 [project.entry-points.pytest11]
-robotics-simulation-harness = "robotics_simulation_harness.plugin"
+robotics-acceptance-harness = "robotics_acceptance_harness.plugin"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
