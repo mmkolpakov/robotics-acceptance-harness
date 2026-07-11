@@ -12,22 +12,42 @@ description = "Attach-only acceptance observer for validated robotics executions
 requires-python = ">=3.12,<3.14"
 readme = "README.md"
 license = "MIT"
+authors = [{ name = "mmkolpakov" }]
+keywords = ["robotics", "ros2", "testing", "simulation", "acceptance"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Testing",
+]
 dependencies = [
   "junitparser>=5.0.1,<6",
   "opentelemetry-proto==1.43.0",
   "pytest>=8,<10",
   "pyyaml>=6.0.2,<7",
-  "robotics-runtime-contracts @ https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.2/robotics_runtime_contracts-0.4.2-py3-none-any.whl",
+  "robotics-runtime-contracts @ https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.3/robotics_runtime_contracts-0.4.3-py3-none-any.whl",
 ]
 
 [project.scripts]
 robotics-acceptance = "robotics_acceptance_harness.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/mmkolpakov/robotics-acceptance-harness"
+Repository = "https://github.com/mmkolpakov/robotics-acceptance-harness"
+Issues = "https://github.com/mmkolpakov/robotics-acceptance-harness/issues"
+
 [dependency-groups]
 dev = [
+  "coverage[toml]==7.15.0",
+  "mypy==2.2.0",
   "pre-commit==4.6.0",
   "pytest==9.1.1",
   "ruff==0.15.21",
+  "types-protobuf==7.34.1.20260518",
+  "types-pyyaml==6.0.12.20260518",
   "yamllint==1.38.0",
 ]
 
@@ -37,6 +57,24 @@ robotics-acceptance-harness = "robotics_acceptance_harness.plugin"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-config", "--strict-markers"]
+
+[tool.coverage.run]
+branch = true
+source = ["robotics_acceptance_harness"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+exclude = ["^src/robotics_simulation_harness/"]
+
+[[tool.mypy.overrides]]
+module = ["junitparser.*", "opentelemetry.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100

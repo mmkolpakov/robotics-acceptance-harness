@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from robotics_runtime_contracts import validate_document
@@ -106,7 +106,7 @@ def _runtime_workload(runtime: Mapping[str, Any]) -> Mapping[str, Any]:
                 "accelerator": runtime["accelerator"],
             }
         )
-    return runtime["workload"]
+    return cast(Mapping[str, Any], runtime["workload"])
 
 
 def _validate_execution_alignment(

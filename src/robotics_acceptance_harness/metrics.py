@@ -39,16 +39,21 @@ def _percentile(values: Sequence[float], quantile: float) -> float:
 
 
 def _aggregate(name: str, values: Sequence[float]) -> float | int:
-    functions = {
-        "min": min,
-        "max": max,
-        "mean": fmean,
-        "p50": lambda items: _percentile(items, 0.50),
-        "p95": lambda items: _percentile(items, 0.95),
-        "p99": lambda items: _percentile(items, 0.99),
-        "count": len,
-    }
-    return functions[name](values)
+    if name == "min":
+        return min(values)
+    if name == "max":
+        return max(values)
+    if name == "mean":
+        return fmean(values)
+    if name == "p50":
+        return _percentile(values, 0.50)
+    if name == "p95":
+        return _percentile(values, 0.95)
+    if name == "p99":
+        return _percentile(values, 0.99)
+    if name == "count":
+        return len(values)
+    raise ValueError(f"unsupported aggregation: {name}")
 
 
 def _compare(operator: str, observed: float | int, threshold: float) -> bool:

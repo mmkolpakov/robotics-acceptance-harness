@@ -13,7 +13,7 @@ send commands to a robot.
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 or 3.13 |
-| Contracts | `robotics-runtime-contracts` 0.4.2 |
+| Contracts | `robotics-runtime-contracts` 0.4.3 |
 | ROS observation | ROS 2 Jazzy with `rclpy` and the declared message packages |
 | Metrics | OTLP JSON produced by the OpenTelemetry Collector file exporter |
 

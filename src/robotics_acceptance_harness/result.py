@@ -225,7 +225,7 @@ def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
     try:
         xml = JUnitXml()
         xml.add_testsuite(suite)
-        xml.write(temporary_path, pretty=True)
+        xml.write(str(temporary_path), pretty=True)
         os.replace(temporary_path, destination)
     except Exception:
         temporary_path.unlink(missing_ok=True)

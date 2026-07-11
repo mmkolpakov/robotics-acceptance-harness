@@ -45,3 +45,10 @@ repos:
         name: Test attach-only policy rules
         args: [--test, .semgrep, --metrics=off]
         pass_filenames: false
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src/robotics_acceptance_harness
+        language: system
+        pass_filenames: false

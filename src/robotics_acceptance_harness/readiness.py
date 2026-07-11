@@ -180,9 +180,9 @@ def _expired_readiness_issues(
 ) -> tuple[ReadinessIssue, ...]:
     issues: list[ReadinessIssue] = []
     for index, expected in enumerate(expected_graph["topics"]):
-        observed = snapshot.topics.get(expected["name"])
+        topic_observation = snapshot.topics.get(expected["name"])
         if elapsed_sec >= float(expected["first_message_timeout_sec"]) and (
-            observed is None or observed.first_message_at_ns is None
+            topic_observation is None or topic_observation.first_message_at_ns is None
         ):
             issues.append(
                 ReadinessIssue(
@@ -191,11 +191,12 @@ def _expired_readiness_issues(
                 )
             )
     for index, expected in enumerate(expected_graph["lifecycle_nodes"]):
-        observed = snapshot.lifecycle_nodes.get(expected["name"])
+        lifecycle_observation = snapshot.lifecycle_nodes.get(expected["name"])
         if elapsed_sec >= float(expected["timeout_sec"]) and (
-            observed is None or observed.state != expected["required_state"]
+            lifecycle_observation is None
+            or lifecycle_observation.state != expected["required_state"]
         ):
-            state = "unavailable" if observed is None else observed.state
+            state = "unavailable" if lifecycle_observation is None else lifecycle_observation.state
             issues.append(
                 ReadinessIssue(
                     f"$.expected_ros_graph.lifecycle_nodes[{index}].timeout_sec",

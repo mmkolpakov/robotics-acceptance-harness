@@ -19,7 +19,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -33,20 +33,25 @@ jobs:
         run: uv sync --locked --all-groups
       - name: Run repository checks
         run: uv run pre-commit run --all-files --show-diff-on-failure
-      - name: Run plugin tests
+      - name: Run tests with coverage
         run: |
           mkdir -p artifacts
-          uv run pytest \
+          uv run coverage run --branch -m pytest \
             --robotics-scenario tests/fixtures/simulation.yaml \
             --junitxml=artifacts/junit.xml
+          uv run coverage report --show-missing --fail-under=80
+          uv run coverage xml -o artifacts/coverage.xml
       - name: Build wheel and source distribution
-        run: uv build --out-dir artifacts/dist
+        run: uv build --no-sources --out-dir artifacts/dist
       - name: Verify installed wheel
         run: |
           uv venv --python 3.12 .wheel-venv
-          uv pip install --python .wheel-venv/bin/python \
-            https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.3.0/robotics_runtime_contracts-0.3.0-py3-none-any.whl \
-            artifacts/dist/*.whl
+          uv pip install --python .wheel-venv/bin/python artifacts/dist/*.whl
+          .wheel-venv/bin/robotics-acceptance --version
+          .wheel-venv/bin/robotics-acceptance explain \
+            --scenario tests/fixtures/v2/simulation.yaml \
+            --runtime tests/fixtures/v2/runtime.yaml \
+            > artifacts/installed-wheel-explain.json
           .wheel-venv/bin/pytest --help | grep -- --robotics-scenario
       - name: Upload validation artifacts
         if: always()
@@ -56,3 +61,28 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
           retention-days: 7
+
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install Python
+        run: uv python install "${{ matrix.python }}"
+      - name: Synchronize locked environment
+        run: uv sync --python "${{ matrix.python }}" --locked --all-groups
+      - name: Run tests
+        run: >-
+          uv run pytest
+          --robotics-scenario tests/fixtures/simulation.yaml

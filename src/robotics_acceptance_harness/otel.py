@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from google.protobuf.json_format import ParseDict
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
@@ -15,7 +16,7 @@ class MetricInputError(ValueError):
     """Raised when an OTLP JSON file cannot be interpreted as metric samples."""
 
 
-def _number_value(point: object) -> float | None:
+def _number_value(point: Any) -> float | None:
     value_kind = point.WhichOneof("value")
     if value_kind == "as_double":
         return float(point.as_double)
