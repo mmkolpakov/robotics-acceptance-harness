@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from time import monotonic_ns, sleep
 from types import MappingProxyType
 from typing import Any, Protocol
 
@@ -56,6 +57,22 @@ class ReadinessIssue:
     message: str
 
 
+class GraphReadinessTimeout(TimeoutError):
+    """Raised when the expected graph never remains ready for the required window."""
+
+    def __init__(self, issues: tuple[ReadinessIssue, ...]) -> None:
+        self.issues = issues
+        detail = "; ".join(f"{issue.json_path}: {issue.message}" for issue in issues)
+        super().__init__(detail or "ROS graph did not remain stable before timeout")
+
+
+@dataclass(frozen=True, slots=True)
+class ReadinessResult:
+    snapshot: GraphSnapshot
+    first_ready_at_ns: int
+    stable_for_sec: float
+
+
 def _check_topics(
     expected_topics: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
     snapshot: GraphSnapshot,
@@ -89,6 +106,20 @@ def _check_topics(
                     f"{path}.min_subscribers",
                     f"expected at least {expected['min_subscribers']}; "
                     f"observed {observed.subscribers}",
+                )
+            )
+        if not observed.qos_compatible:
+            issues.append(
+                ReadinessIssue(
+                    f"{path}.qos_profile",
+                    "publisher and subscriber QoS policies are incompatible",
+                )
+            )
+        if observed.first_message_at_ns is None:
+            issues.append(
+                ReadinessIssue(
+                    f"{path}.first_message_timeout_sec",
+                    "no message has been observed",
                 )
             )
     return issues
@@ -142,12 +173,58 @@ def evaluate_graph(
     return tuple(issues)
 
 
+def wait_for_readiness(
+    expected_graph: Mapping[str, Any],
+    observer: GraphObserver,
+    *,
+    timeout_sec: float,
+    stable_for_sec: float,
+    poll_interval_sec: float = 0.1,
+    now_ns: Callable[[], int] = monotonic_ns,
+    sleep_fn: Callable[[float], None] = sleep,
+) -> ReadinessResult:
+    """Wait until every endpoint remains ready for one uninterrupted window."""
+
+    lifecycle_stability = max(
+        (float(node["stable_for_sec"]) for node in expected_graph["lifecycle_nodes"]),
+        default=0.0,
+    )
+    required_stability = max(stable_for_sec, lifecycle_stability)
+    started_at_ns = now_ns()
+    deadline_ns = started_at_ns + int(timeout_sec * 1_000_000_000)
+    first_ready_at_ns: int | None = None
+    last_issues: tuple[ReadinessIssue, ...] = ()
+
+    while True:
+        snapshot = observer.snapshot()
+        current_ns = now_ns()
+        last_issues = evaluate_graph(expected_graph, snapshot)
+        if last_issues:
+            first_ready_at_ns = None
+        else:
+            if first_ready_at_ns is None:
+                first_ready_at_ns = current_ns
+            stable_ns = current_ns - first_ready_at_ns
+            if stable_ns >= int(required_stability * 1_000_000_000):
+                return ReadinessResult(
+                    snapshot=snapshot,
+                    first_ready_at_ns=first_ready_at_ns,
+                    stable_for_sec=stable_ns / 1_000_000_000,
+                )
+        if current_ns >= deadline_ns:
+            raise GraphReadinessTimeout(last_issues)
+        sleep_fn(poll_interval_sec)
+
+
 __all__ = [
     "EndpointObservation",
+    "GraphReadinessTimeout",
     "GraphObserver",
     "GraphSnapshot",
     "LifecycleObservation",
     "ReadinessIssue",
+    "ReadinessResult",
     "TopicObservation",
     "evaluate_graph",
+    "wait_for_readiness",
 ]
