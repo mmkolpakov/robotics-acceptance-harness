@@ -40,6 +40,7 @@ class RosGraphObserver:
     ) -> None:
         try:
             self._rclpy = module_loader("rclpy")
+            actions = module_loader("rclpy.action")
             context_module = module_loader("rclpy.context")
             executor_module = module_loader("rclpy.executors")
             self._qos = module_loader("rclpy.qos")
@@ -73,6 +74,7 @@ class RosGraphObserver:
             self._get_message = utilities.get_message
             self._get_state_type = lifecycle_services.GetState
             self._clock_type = clock_messages.Clock
+            self._get_action_names_and_types = actions.get_action_names_and_types
             self._lifecycle: dict[str, _LifecycleTracker] = {}
             self._configure_topics(observe_clock)
             self._configure_lifecycle()
@@ -188,7 +190,7 @@ class RosGraphObserver:
             )
             for expected in self._expected_graph["services"]
         }
-        action_types = dict(self._node.get_action_names_and_types())
+        action_types = dict(self._get_action_names_and_types(self._node))
         actions = {
             str(expected["name"]): EndpointObservation(
                 types=tuple(action_types.get(str(expected["name"]), ())),
