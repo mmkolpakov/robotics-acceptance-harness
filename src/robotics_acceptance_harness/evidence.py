@@ -29,6 +29,7 @@ class EvidenceValidationError(ValueError):
 class VerifiedEvidence:
     index: LoadedDocument
     links: tuple[Mapping[str, Any], ...]
+    local_files: Mapping[Path, Mapping[str, Any]]
 
 
 def _platform_path(value: str) -> Path:
@@ -37,7 +38,7 @@ def _platform_path(value: str) -> Path:
     return Path(value)
 
 
-def _local_link(segment: Mapping[str, Any], index: int) -> Mapping[str, Any]:
+def _local_link(segment: Mapping[str, Any], index: int) -> tuple[Path, Mapping[str, Any]]:
     path = _platform_path(str(segment["local_path"]))
     json_path = f"$.segments[{index}]"
     uri = urlsplit(str(segment["uri"]))
@@ -67,7 +68,7 @@ def _local_link(segment: Mapping[str, Any], index: int) -> Mapping[str, Any]:
             f"{json_path}.sha256",
             f"expected {segment['sha256']}; observed {observed_digest}",
         )
-    return _result_link(segment)
+    return path.resolve(), _result_link(segment)
 
 
 def _remote_link(segment: Mapping[str, Any], index: int) -> Mapping[str, Any]:
@@ -110,12 +111,15 @@ def load_evidence_index(
         )
 
     links: list[Mapping[str, Any]] = []
+    local_files: dict[Path, Mapping[str, Any]] = {}
     for index, segment in enumerate(document.data["segments"]):
         if segment["upload_status"] == "local":
-            links.append(_local_link(segment, index))
+            local_path, link = _local_link(segment, index)
+            local_files[local_path] = link
+            links.append(link)
         else:
             links.append(_remote_link(segment, index))
-    return VerifiedEvidence(document, tuple(links))
+    return VerifiedEvidence(document, tuple(links), MappingProxyType(local_files))
 
 
 __all__ = ["EvidenceValidationError", "VerifiedEvidence", "load_evidence_index"]

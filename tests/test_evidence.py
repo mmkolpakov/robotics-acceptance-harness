@@ -52,6 +52,7 @@ def test_verified_local_evidence_becomes_result_link(tmp_path: Path) -> None:
     )
 
     assert verified.links[0]["uri"] == segment.as_uri()
+    assert segment.resolve() in verified.local_files
     assert "local_path" not in verified.links[0]
     assert "upload_status" not in verified.links[0]
 
