@@ -1,5 +1,9 @@
 # Robotics Acceptance Harness
 
+[![CI](https://github.com/mmkolpakov/robotics-acceptance-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/mmkolpakov/robotics-acceptance-harness/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mmkolpakov/robotics-acceptance-harness)](https://github.com/mmkolpakov/robotics-acceptance-harness/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Attach-only acceptance observation for an already running ROS 2 system.
 
 The harness validates versioned execution documents, waits for the declared ROS
@@ -19,6 +23,21 @@ send commands to a robot.
 
 `explain` needs only Python. `verify` runs inside a ROS-enabled environment and
 joins the existing `ROS_DOMAIN_ID`.
+
+## Install
+
+The current release is 0.5.1. Install its attested wheel directly from the
+GitHub Release:
+
+```bash
+python -m pip install \
+  https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.5.1/robotics_acceptance_harness-0.5.1-py3-none-any.whl
+robotics-acceptance --version
+```
+
+Use the released acceptance-observer OCI image from `robotics-runtime-infra`
+when `verify` needs ROS 2 Jazzy and `rclpy`. A plain Python environment is
+sufficient for `explain` and the pytest plugin.
 
 ## Quick Start
 
