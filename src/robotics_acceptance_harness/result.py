@@ -12,6 +12,7 @@ from junitparser import Error, Failure, JUnitXml, TestCase, TestSuite
 from robotics_runtime_contracts import validate_document
 
 from robotics_acceptance_harness.documents import DocumentBundle
+from robotics_acceptance_harness.evidence import VerifiedEvidence
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import GraphSnapshot, ReadinessResult
 from robotics_acceptance_harness.timing import TimingObservation
@@ -101,12 +102,19 @@ def build_acceptance_result(
     monotonic_duration_sec: float,
     shutdown: Mapping[str, bool],
     evidence: Sequence[Mapping[str, Any]] = (),
+    evidence_index: VerifiedEvidence | None = None,
     status: str | None = None,
 ) -> dict[str, Any]:
     """Build and validate one acceptance-result.v2 document."""
 
     if bundle.runtime is None:
         raise ValueError("acceptance-result.v2 requires a runtime manifest")
+    if evidence_index is not None:
+        if evidence:
+            raise ValueError("provide evidence or evidence_index, not both")
+        if evidence_index.index.data["run_id"] != result_id:
+            raise ValueError("evidence index run_id must equal result_id")
+        evidence = evidence_index.links
     result: dict[str, Any] = {
         "schema_version": "acceptance-result.v2",
         "result_id": result_id,

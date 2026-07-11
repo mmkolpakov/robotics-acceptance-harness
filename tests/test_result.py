@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from os import name as os_name
 from pathlib import Path
 
+import yaml
 from junitparser import JUnitXml
 from robotics_runtime_contracts import validate_document
 
 from robotics_acceptance_harness.documents import load_bundle
+from robotics_acceptance_harness.evidence import load_evidence_index
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import (
     GraphSnapshot,
@@ -73,3 +77,42 @@ def test_json_and_junit_outputs_share_the_same_status(tmp_path: Path) -> None:
     xml = JUnitXml.fromfile(junit_path)
     assert xml.failures == 1
     assert xml.errors == 0
+
+
+def test_result_links_only_verified_evidence(tmp_path: Path) -> None:
+    segment = tmp_path / "run.mcap"
+    segment.write_bytes(b"evidence")
+    local_path = segment.as_posix()
+    if os_name == "nt":
+        local_path = f"/{local_path}"
+    index = {
+        "schema_version": "evidence-index.v1",
+        "run_id": "org.example.physics-smoke-001",
+        "generated_at": "2026-07-11T12:01:00Z",
+        "finalized": True,
+        "segments": [
+            {
+                "uri": segment.as_uri(),
+                "local_path": local_path,
+                "media_type": "application/mcap",
+                "sha256": sha256(segment.read_bytes()).hexdigest(),
+                "size_bytes": segment.stat().st_size,
+                "retention_class": "pull-request-7d",
+                "segment_index": 0,
+                "upload_status": "local",
+                "checksum_verified": True,
+            }
+        ],
+    }
+    index_path = tmp_path / "evidence-index.yaml"
+    index_path.write_text(yaml.safe_dump(index), encoding="utf-8")
+    verified = load_evidence_index(index_path)
+
+    result = build_acceptance_result(
+        assertions=(),
+        evidence_index=verified,
+        **result_inputs(),
+    )
+
+    assert result["evidence"][0]["uri"] == segment.as_uri()
+    assert "local_path" not in result["evidence"][0]
