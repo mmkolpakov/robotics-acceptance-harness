@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from robotics_simulation_harness.plugin import _load_scenario
+from robotics_acceptance_harness.plugin import _load_scenario
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

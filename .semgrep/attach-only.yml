@@ -1,0 +1,71 @@
+---
+rules:
+  - id: attach-only-no-process-control
+    message: The acceptance harness must not start or control external processes.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: import subprocess
+      - pattern: from subprocess import $X
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+      - pattern-regex: '\bos\.(?:exec|spawn)[a-z]*\s*\('
+
+  - id: attach-only-no-orchestrator-sdk
+    message: Process orchestration and object storage belong to the runtime infrastructure.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: import docker
+      - pattern: from docker import $X
+      - pattern: import launch
+      - pattern: from launch import $X
+      - pattern: import launch_ros
+      - pattern: from launch_ros import $X
+      - pattern: import boto3
+      - pattern: from boto3 import $X
+      - pattern: import botocore
+      - pattern: from botocore import $X
+
+  - id: attach-only-no-network-client
+    message: The acceptance harness validates local inputs and must not fetch them over the network.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: import requests
+      - pattern: from requests import $X
+      - pattern: import httpx
+      - pattern: from httpx import $X
+      - pattern: import aiohttp
+      - pattern: from aiohttp import $X
+      - pattern: import urllib.request
+      - pattern: from urllib.request import $X
+      - pattern: import socket
+      - pattern: from socket import $X
+
+  - id: attach-only-no-ros-publisher
+    message: The acceptance harness may subscribe and query but must not publish ROS commands.
+    severity: ERROR
+    languages: [python]
+    pattern: $NODE.create_publisher(...)
+
+  - id: attach-only-no-action-client
+    message: The acceptance harness must not send ROS action goals.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: $CLIENT.send_goal(...)
+      - pattern: $CLIENT.send_goal_async(...)
+      - pattern: ActionClient(...)
+
+  - id: attach-only-no-mutation-service-types
+    message: The acceptance harness must not import mutation or actuation service types.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: from lifecycle_msgs.srv import ChangeState
+      - pattern: from ros_gz_interfaces.srv import ControlWorld
+      - pattern: from controller_manager_msgs.srv import SwitchController
+      - pattern: from mavros_msgs.srv import CommandBool
+      - pattern: from mavros_msgs.srv import CommandLong
+      - pattern: from mavros_msgs.srv import SetMode

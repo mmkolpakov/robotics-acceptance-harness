@@ -1,3 +1,5 @@
-"""Simulation-only pytest harness for resolved robotics scenarios."""
+"""Compatibility import for robotics_acceptance_harness."""
 
-__version__ = "0.4.0"
+from robotics_acceptance_harness import __version__
+
+__all__ = ["__version__"]
