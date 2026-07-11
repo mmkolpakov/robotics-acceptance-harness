@@ -22,16 +22,24 @@ class EndpointObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class LifecycleObservation:
+    state: str
+    observed_at_ns: int
+
+
+@dataclass(frozen=True, slots=True)
 class GraphSnapshot:
     observed_at_ns: int
     topics: Mapping[str, TopicObservation] = field(default_factory=dict)
     services: Mapping[str, EndpointObservation] = field(default_factory=dict)
     actions: Mapping[str, EndpointObservation] = field(default_factory=dict)
+    lifecycle_nodes: Mapping[str, LifecycleObservation] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "topics", MappingProxyType(dict(self.topics)))
         object.__setattr__(self, "services", MappingProxyType(dict(self.services)))
         object.__setattr__(self, "actions", MappingProxyType(dict(self.actions)))
+        object.__setattr__(self, "lifecycle_nodes", MappingProxyType(dict(self.lifecycle_nodes)))
 
 
 class GraphObserver(Protocol):
@@ -118,6 +126,19 @@ def evaluate_graph(
     issues = _check_topics(expected_graph["topics"], snapshot)
     issues.extend(_check_endpoints("services", expected_graph["services"], snapshot.services))
     issues.extend(_check_endpoints("actions", expected_graph["actions"], snapshot.actions))
+    for index, expected in enumerate(expected_graph["lifecycle_nodes"]):
+        path = f"$.expected_ros_graph.lifecycle_nodes[{index}]"
+        name = expected["name"]
+        observed = snapshot.lifecycle_nodes.get(name)
+        if observed is None:
+            issues.append(ReadinessIssue(path, f"managed node {name} state is unavailable"))
+        elif observed.state != expected["required_state"]:
+            issues.append(
+                ReadinessIssue(
+                    f"{path}.required_state",
+                    f"expected {expected['required_state']}; observed {observed.state}",
+                )
+            )
     return tuple(issues)
 
 
@@ -125,6 +146,7 @@ __all__ = [
     "EndpointObservation",
     "GraphObserver",
     "GraphSnapshot",
+    "LifecycleObservation",
     "ReadinessIssue",
     "TopicObservation",
     "evaluate_graph",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from robotics_acceptance_harness.readiness import (
     EndpointObservation,
     GraphSnapshot,
+    LifecycleObservation,
     TopicObservation,
     evaluate_graph,
 )
@@ -93,3 +94,44 @@ def test_graph_snapshot_copies_input_mappings() -> None:
     snapshot = GraphSnapshot(observed_at_ns=1, topics=topics)
     topics.clear()
     assert "/clock" in snapshot.topics
+
+
+def test_managed_node_must_be_active() -> None:
+    expected = expected_graph()
+    expected["lifecycle_nodes"] = [
+        {
+            "name": "/camera",
+            "required_state": "active",
+            "timeout_sec": 10,
+            "stable_for_sec": 1,
+        }
+    ]
+    snapshot = ready_snapshot()
+    inactive = GraphSnapshot(
+        observed_at_ns=snapshot.observed_at_ns,
+        topics=snapshot.topics,
+        services=snapshot.services,
+        actions=snapshot.actions,
+        lifecycle_nodes={
+            "/camera": LifecycleObservation(state="inactive", observed_at_ns=1),
+        },
+    )
+
+    issues = evaluate_graph(expected, inactive)
+    assert [issue.json_path for issue in issues] == [
+        "$.expected_ros_graph.lifecycle_nodes[0].required_state"
+    ]
+
+
+def test_missing_managed_node_state_is_not_ready() -> None:
+    expected = expected_graph()
+    expected["lifecycle_nodes"] = [
+        {
+            "name": "/camera",
+            "required_state": "active",
+            "timeout_sec": 10,
+            "stable_for_sec": 1,
+        }
+    ]
+    issues = evaluate_graph(expected, ready_snapshot())
+    assert issues[0].json_path == "$.expected_ros_graph.lifecycle_nodes[0]"
