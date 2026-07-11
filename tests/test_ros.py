@@ -71,9 +71,6 @@ class FakeNode:
     def count_services(self, _name: str) -> int:
         return 1
 
-    def get_action_names_and_types(self) -> list[tuple[str, list[str]]]:
-        return [("/takeoff", ["example_interfaces/action/Fibonacci"])]
-
     def destroy_node(self) -> None:
         self.destroyed = True
 
@@ -148,6 +145,13 @@ def fake_modules(node: FakeNode) -> dict[str, object]:
         "rclpy": SimpleNamespace(
             init=lambda **_kwargs: None,
             create_node=lambda *_args, **_kwargs: node,
+        ),
+        "rclpy.action": SimpleNamespace(
+            get_action_names_and_types=lambda observed_node: (
+                [("/takeoff", ["example_interfaces/action/Fibonacci"])]
+                if observed_node is node
+                else []
+            )
         ),
         "rclpy.context": SimpleNamespace(Context=FakeContext),
         "rclpy.executors": SimpleNamespace(SingleThreadedExecutor=FakeExecutor),
