@@ -21,3 +21,19 @@ repos:
     rev: v1.38.0
     hooks:
       - id: yamllint
+  - repo: https://github.com/semgrep/semgrep
+    rev: v1.164.0
+    hooks:
+      - id: semgrep
+        name: Enforce attach-only API boundary
+        args:
+          - scan
+          - --config=.semgrep/attach-only.yml
+          - --error
+          - --metrics=off
+          - src/robotics_acceptance_harness
+        pass_filenames: false
+      - id: semgrep
+        name: Test attach-only policy rules
+        args: [--test, .semgrep, --metrics=off]
+        pass_filenames: false
