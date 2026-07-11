@@ -15,7 +15,7 @@ license = "MIT"
 dependencies = [
   "pytest>=8,<10",
   "pyyaml>=6.0.2,<7",
-  "robotics-runtime-contracts @ https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.0/robotics_runtime_contracts-0.4.0-py3-none-any.whl",
+  "robotics-runtime-contracts @ https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.1/robotics_runtime_contracts-0.4.1-py3-none-any.whl",
 ]
 
 [dependency-groups]

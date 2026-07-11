@@ -45,6 +45,38 @@ def test_simulation_scenario_runs_tests(pytester: pytest.Pytester) -> None:
     result.assert_outcomes(passed=1)
 
 
+def test_v2_bundle_runs_with_runtime_manifest(pytester: pytest.Pytester) -> None:
+    test_file = pytester.makepyfile(
+        """
+        def test_bundle(robotics_bundle):
+            assert robotics_bundle.runtime.schema_version == "runtime-manifest.v2"
+            assert robotics_bundle.runtime.data["workload"]["kind"] == "none"
+        """
+    )
+    result = run_isolated(
+        pytester,
+        test_file.name,
+        "--robotics-scenario",
+        str(FIXTURES / "v2" / "simulation.yaml"),
+        "--robotics-runtime",
+        str(FIXTURES / "v2" / "runtime.yaml"),
+    )
+    result.assert_outcomes(passed=1)
+
+
+def test_v2_bundle_requires_runtime_manifest(pytester: pytest.Pytester) -> None:
+    test_file = make_test(pytester)
+    result = run_isolated(
+        pytester,
+        test_file.name,
+        "--robotics-scenario",
+        str(FIXTURES / "v2" / "simulation.yaml"),
+    )
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*requires a runtime manifest*"])
+
+
 @pytest.mark.parametrize("fixture_name", ["hil.yaml", "real-robot.yaml"])
 def test_non_simulation_target_stops_before_test_body(
     pytester: pytest.Pytester,

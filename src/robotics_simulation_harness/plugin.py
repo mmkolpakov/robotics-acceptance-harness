@@ -4,6 +4,7 @@ from robotics_acceptance_harness.plugin import (
     _load_scenario,
     pytest_addoption,
     pytest_configure,
+    robotics_bundle,
     robotics_scenario,
 )
 
@@ -11,5 +12,6 @@ __all__ = [
     "_load_scenario",
     "pytest_addoption",
     "pytest_configure",
+    "robotics_bundle",
     "robotics_scenario",
 ]

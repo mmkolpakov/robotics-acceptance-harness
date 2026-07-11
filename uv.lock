@@ -255,7 +255,7 @@ dev = [
 requires-dist = [
     { name = "pytest", specifier = ">=8,<10" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
-    { name = "robotics-runtime-contracts", url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.0/robotics_runtime_contracts-0.4.0-py3-none-any.whl" },
+    { name = "robotics-runtime-contracts", url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.1/robotics_runtime_contracts-0.4.1-py3-none-any.whl" },
 ]
 
 [package.metadata.requires-dev]
@@ -268,13 +268,13 @@ dev = [
 
 [[package]]
 name = "robotics-runtime-contracts"
-version = "0.4.0"
-source = { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.0/robotics_runtime_contracts-0.4.0-py3-none-any.whl" }
+version = "0.4.1"
+source = { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.1/robotics_runtime_contracts-0.4.1-py3-none-any.whl" }
 dependencies = [
     { name = "jsonschema" },
 ]
 wheels = [
-    { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.0/robotics_runtime_contracts-0.4.0-py3-none-any.whl", hash = "sha256:49c5f9eaf5902902ea6fe6729a0519a39e24253e2beecc1ba0c6e6d6c96154bd" },
+    { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.1/robotics_runtime_contracts-0.4.1-py3-none-any.whl", hash = "sha256:ec2ae01669c11604a4eba7d89ebe7ba6360705340aeb6f5cc9d919aa576b5eb7" },
 ]
 
 [package.metadata]
