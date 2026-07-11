@@ -173,6 +173,38 @@ def evaluate_graph(
     return tuple(issues)
 
 
+def _expired_readiness_issues(
+    expected_graph: Mapping[str, Any],
+    snapshot: GraphSnapshot,
+    elapsed_sec: float,
+) -> tuple[ReadinessIssue, ...]:
+    issues: list[ReadinessIssue] = []
+    for index, expected in enumerate(expected_graph["topics"]):
+        observed = snapshot.topics.get(expected["name"])
+        if elapsed_sec >= float(expected["first_message_timeout_sec"]) and (
+            observed is None or observed.first_message_at_ns is None
+        ):
+            issues.append(
+                ReadinessIssue(
+                    f"$.expected_ros_graph.topics[{index}].first_message_timeout_sec",
+                    f"no message before {expected['first_message_timeout_sec']} seconds",
+                )
+            )
+    for index, expected in enumerate(expected_graph["lifecycle_nodes"]):
+        observed = snapshot.lifecycle_nodes.get(expected["name"])
+        if elapsed_sec >= float(expected["timeout_sec"]) and (
+            observed is None or observed.state != expected["required_state"]
+        ):
+            state = "unavailable" if observed is None else observed.state
+            issues.append(
+                ReadinessIssue(
+                    f"$.expected_ros_graph.lifecycle_nodes[{index}].timeout_sec",
+                    f"required state {expected['required_state']} not reached; observed {state}",
+                )
+            )
+    return tuple(issues)
+
+
 def wait_for_readiness(
     expected_graph: Mapping[str, Any],
     observer: GraphObserver,
@@ -199,6 +231,10 @@ def wait_for_readiness(
         snapshot = observer.snapshot()
         current_ns = now_ns()
         last_issues = evaluate_graph(expected_graph, snapshot)
+        elapsed_sec = (current_ns - started_at_ns) / 1_000_000_000
+        expired_issues = _expired_readiness_issues(expected_graph, snapshot, elapsed_sec)
+        if expired_issues:
+            raise GraphReadinessTimeout(expired_issues)
         if last_issues:
             first_ready_at_ns = None
         else:

@@ -227,3 +227,53 @@ def test_readiness_timeout_reports_last_contract_issues() -> None:
 
     assert caught.value.issues
     assert caught.value.issues[0].json_path.startswith("$.expected_ros_graph")
+
+
+def test_first_message_uses_its_own_deadline() -> None:
+    expected = expected_graph()
+    expected["topics"][0]["first_message_timeout_sec"] = 2
+    time = FakeTime()
+
+    with pytest.raises(GraphReadinessTimeout) as caught:
+        wait_for_readiness(
+            expected,
+            FakeObserver([GraphSnapshot(observed_at_ns=0)]),
+            timeout_sec=10,
+            stable_for_sec=1,
+            poll_interval_sec=1,
+            now_ns=time.now_ns,
+            sleep_fn=time.sleep,
+        )
+
+    assert time.value_ns == 2_000_000_000
+    assert caught.value.issues[0].json_path.endswith("first_message_timeout_sec")
+
+
+def test_lifecycle_state_uses_its_own_deadline() -> None:
+    expected = expected_graph()
+    expected["topics"] = []
+    expected["services"] = []
+    expected["actions"] = []
+    expected["lifecycle_nodes"] = [
+        {
+            "name": "/camera",
+            "required_state": "active",
+            "timeout_sec": 2,
+            "stable_for_sec": 0,
+        }
+    ]
+    time = FakeTime()
+
+    with pytest.raises(GraphReadinessTimeout) as caught:
+        wait_for_readiness(
+            expected,
+            FakeObserver([GraphSnapshot(observed_at_ns=0)]),
+            timeout_sec=10,
+            stable_for_sec=0,
+            poll_interval_sec=1,
+            now_ns=time.now_ns,
+            sleep_fn=time.sleep,
+        )
+
+    assert time.value_ns == 2_000_000_000
+    assert caught.value.issues[0].json_path.endswith("timeout_sec")
