@@ -13,6 +13,7 @@ requires-python = ">=3.12,<3.14"
 readme = "README.md"
 license = "MIT"
 dependencies = [
+  "junitparser>=5.0.1,<6",
   "pytest>=8,<10",
   "pyyaml>=6.0.2,<7",
   "robotics-runtime-contracts @ https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.1/robotics_runtime_contracts-0.4.1-py3-none-any.whl",
