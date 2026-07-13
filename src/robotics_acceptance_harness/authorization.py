@@ -147,9 +147,7 @@ def evaluate_physical_authorization(
             verification_target[field],
         )
 
-    runtime_targets = {
-        str(target["target_id"]): target for target in runtime["physical_targets"]
-    }
+    runtime_targets = {str(target["target_id"]): target for target in runtime["physical_targets"]}
     runtime_target = runtime_targets.get(str(permit_target["target_id"]))
     if runtime_target is None:
         issues.append(
@@ -220,9 +218,7 @@ def evaluate_physical_authorization(
             )
         )
     if verified_at > now:
-        issues.append(
-            AuthorizationIssue("$.verification.verified_at", "must not be in the future")
-        )
+        issues.append(AuthorizationIssue("$.verification.verified_at", "must not be in the future"))
     return tuple(issues)
 
 

@@ -13,6 +13,8 @@ from robotics_runtime_contracts import validate_document
 
 from robotics_acceptance_harness.documents import DocumentBundle
 from robotics_acceptance_harness.evidence import VerifiedEvidence
+from robotics_acceptance_harness.forbidden_graph import ForbiddenGraphObservation
+from robotics_acceptance_harness.hardware_timing import HardwareTimingObservation
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import GraphSnapshot, ReadinessResult
 from robotics_acceptance_harness.timing import TimingObservation
@@ -62,10 +64,12 @@ def _observed_graph(readiness: ReadinessResult) -> dict[str, Any]:
         "services": [
             {"name": name, "type": observation.types[0], "servers": observation.servers}
             for name, observation in sorted(snapshot.services.items())
+            if observation.servers > 0 and observation.types
         ],
         "actions": [
             {"name": name, "type": observation.types[0], "servers": observation.servers}
             for name, observation in sorted(snapshot.actions.items())
+            if observation.servers > 0 and observation.types
         ],
     }
 
@@ -90,6 +94,51 @@ def _status(evaluations: Sequence[AssertionEvaluation]) -> str:
     return "passed"
 
 
+def _forbidden_graph_result(observation: ForbiddenGraphObservation) -> dict[str, Any]:
+    return {
+        "passed": observation.passed,
+        "checked_topics": list(observation.checked_topics),
+        "checked_services": list(observation.checked_services),
+        "checked_actions": list(observation.checked_actions),
+        "violations": [
+            {"kind": violation.kind, "name": violation.name} for violation in observation.violations
+        ],
+    }
+
+
+def _authorization_result(bundle: DocumentBundle) -> dict[str, Any]:
+    execution = bundle.scenario.data["execution"]
+    if execution["target_environment"] == "simulation":
+        return {"mode": "none"}
+    if bundle.permit is None or bundle.verification is None:
+        raise ValueError("physical acceptance-result.v3 requires verified authorization")
+    return {
+        "mode": "verified_execution_permit",
+        "permit_sha256": bundle.permit.sha256,
+        "execution_verification_sha256": bundle.verification.sha256,
+        "trust_policy_sha256": bundle.verification.data["trust_policy_sha256"],
+        "target": dict(bundle.verification.data["target"]),
+    }
+
+
+def _hardware_clock_result(
+    observation: HardwareTimingObservation,
+    evidence_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "sync_protocol": observation.sync_protocol,
+        "source": observation.source,
+        "measured_at": _iso8601(observation.measured_at),
+        "sample_count": observation.sample_count,
+        "offset_ms": observation.offset_ms,
+        "jitter_ms": observation.jitter_ms,
+        "drift_ppm": observation.drift_ppm,
+        "max_sample_age_ms": observation.max_sample_age_ms,
+        "within_policy": observation.within_policy,
+        "evidence_sha256": evidence_sha256,
+    }
+
+
 def build_acceptance_result(
     *,
     result_id: str,
@@ -104,8 +153,11 @@ def build_acceptance_result(
     evidence: Sequence[Mapping[str, Any]] = (),
     evidence_index: VerifiedEvidence | None = None,
     status: str | None = None,
+    forbidden_graph: ForbiddenGraphObservation | None = None,
+    hardware_timing: HardwareTimingObservation | None = None,
+    hardware_timing_evidence_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Build and validate one acceptance-result.v2 document."""
+    """Build and validate the result version corresponding to the scenario."""
 
     if bundle.runtime is None:
         raise ValueError("acceptance-result.v2 requires a runtime manifest")
@@ -115,15 +167,42 @@ def build_acceptance_result(
         if evidence_index.index.data["run_id"] != result_id:
             raise ValueError("evidence index run_id must equal result_id")
         evidence = evidence_index.links
+    scenario_v3 = bundle.scenario.schema_version == "acceptance-scenario.v3"
+    if not scenario_v3 and any(
+        value is not None
+        for value in (forbidden_graph, hardware_timing, hardware_timing_evidence_sha256)
+    ):
+        raise ValueError("acceptance-result.v2 does not accept v3 observations")
+    if scenario_v3 and forbidden_graph is None:
+        raise ValueError("acceptance-result.v3 requires forbidden graph observation")
+    physical = bundle.scenario.data["execution"]["target_environment"] in {
+        "hil",
+        "real_robot",
+    }
+    if physical and (hardware_timing is None or hardware_timing_evidence_sha256 is None):
+        raise ValueError("physical acceptance-result.v3 requires hardware timing evidence")
+    if not physical and (
+        hardware_timing is not None or hardware_timing_evidence_sha256 is not None
+    ):
+        raise ValueError("simulation acceptance-result.v3 does not accept hardware timing")
+
+    result_status = status or _status(assertions)
+    if result_status == "passed" and scenario_v3:
+        assert forbidden_graph is not None
+        if not forbidden_graph.passed or (
+            hardware_timing is not None and not hardware_timing.within_policy
+        ):
+            result_status = "failed"
+
     result: dict[str, Any] = {
-        "schema_version": "acceptance-result.v2",
+        "schema_version": "acceptance-result.v3" if scenario_v3 else "acceptance-result.v2",
         "result_id": result_id,
         "scenario_sha256": bundle.scenario.sha256,
         "runtime_manifest_sha256": bundle.runtime.sha256,
         "started_at": _iso8601(started_at),
         "finished_at": _iso8601(finished_at),
         "monotonic_duration_sec": monotonic_duration_sec,
-        "status": status or _status(assertions),
+        "status": result_status,
         "assertion_results": [
             {
                 "assertion_id": evaluation.assertion_id,
@@ -157,11 +236,21 @@ def build_acceptance_result(
         "shutdown": dict(shutdown),
         "evidence": [dict(item) for item in evidence],
     }
+    if scenario_v3:
+        assert forbidden_graph is not None
+        result["forbidden_graph_observation"] = _forbidden_graph_result(forbidden_graph)
+        result["authorization"] = _authorization_result(bundle)
+        if hardware_timing is not None:
+            assert hardware_timing_evidence_sha256 is not None
+            result["hardware_clock_observation"] = _hardware_clock_result(
+                hardware_timing,
+                hardware_timing_evidence_sha256,
+            )
     if bundle.model is not None:
         result["model_manifest_sha256"] = bundle.model.sha256
     if bundle.dataset is not None:
         result["dataset_manifest_sha256"] = bundle.dataset.sha256
-    if bundle.permit is not None:
+    if bundle.permit is not None and not scenario_v3:
         result["permit_sha256"] = bundle.permit.sha256
     validate_document(result)
     return result
@@ -204,13 +293,33 @@ def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
     suite = TestSuite("robotics-acceptance")
     suite.add_property("scenario_sha256", result["scenario_sha256"])
     suite.add_property("runtime_manifest_sha256", result["runtime_manifest_sha256"])
-    assertion_results = result["assertion_results"] or [
-        {
-            "assertion_id": "acceptance",
-            "status": result["status"],
-            "message": "",
-        }
-    ]
+    assertion_results = list(result["assertion_results"])
+    if result["schema_version"] == "acceptance-result.v3":
+        forbidden = result["forbidden_graph_observation"]
+        assertion_results.append(
+            {
+                "assertion_id": "forbidden-ros-graph",
+                "status": "passed" if forbidden["passed"] else "failed",
+                "message": "" if forbidden["passed"] else "forbidden ROS interface observed",
+            }
+        )
+        hardware = result.get("hardware_clock_observation")
+        if hardware is not None:
+            assertion_results.append(
+                {
+                    "assertion_id": "hardware-clock-policy",
+                    "status": "passed" if hardware["within_policy"] else "failed",
+                    "message": "" if hardware["within_policy"] else "hardware timing out of policy",
+                }
+            )
+    if not assertion_results:
+        assertion_results.append(
+            {
+                "assertion_id": "acceptance",
+                "status": result["status"],
+                "message": "",
+            }
+        )
     for assertion in assertion_results:
         case = TestCase(assertion["assertion_id"], classname="robotics.acceptance")
         message = assertion.get("message", "")

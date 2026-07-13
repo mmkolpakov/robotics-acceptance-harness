@@ -38,7 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     explain = subparsers.add_parser("explain", help="Validate and explain an execution bundle.")
     _add_bundle_arguments(explain)
 
-    verify = subparsers.add_parser("verify", help="Observe and evaluate a running simulation.")
+    verify = subparsers.add_parser("verify", help="Observe and evaluate a running execution.")
     _add_bundle_arguments(verify)
     verify.add_argument("--evidence-index", required=True, metavar="PATH")
     verify.add_argument(
