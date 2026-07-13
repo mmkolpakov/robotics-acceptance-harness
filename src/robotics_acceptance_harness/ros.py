@@ -35,6 +35,7 @@ class RosGraphObserver:
         expected_graph: Mapping[str, Any],
         *,
         observe_clock: bool,
+        forbidden_graph: Mapping[str, Any] | None = None,
         node_name: str = "robotics_acceptance_observer",
         module_loader: Callable[[str], Any] = import_module,
     ) -> None:
@@ -54,6 +55,11 @@ class RosGraphObserver:
             ) from error
 
         self._expected_graph = expected_graph
+        self._forbidden_graph = forbidden_graph or {
+            "topics": (),
+            "services": (),
+            "actions": (),
+        }
         self._context = context_module.Context()
         self._rclpy.init(args=None, context=self._context)
         try:
@@ -135,6 +141,11 @@ class RosGraphObserver:
             client = self._node.create_client(self._get_state_type, service_name)
             self._lifecycle[name] = _LifecycleTracker(client, self._get_state_type.Request)
 
+    def _observed_names(self, kind: str) -> tuple[str, ...]:
+        expected = (str(item["name"]) for item in self._expected_graph[kind])
+        forbidden = (str(name) for name in self._forbidden_graph[kind])
+        return tuple(dict.fromkeys((*expected, *forbidden)))
+
     def _poll_lifecycle(self, observed_at_ns: int) -> None:
         for tracker in self._lifecycle.values():
             if tracker.future is not None and tracker.future.done():
@@ -168,8 +179,7 @@ class RosGraphObserver:
 
         topic_types = dict(self._node.get_topic_names_and_types())
         topics: dict[str, TopicObservation] = {}
-        for expected in self._expected_graph["topics"]:
-            name = str(expected["name"])
+        for name in self._observed_names("topics"):
             subscribers = max(
                 0,
                 self._node.count_subscribers(name) - self._own_subscription_counts.get(name, 0),
@@ -179,24 +189,24 @@ class RosGraphObserver:
                 publishers=self._node.count_publishers(name),
                 subscribers=subscribers,
                 first_message_at_ns=self._first_messages.get(name),
-                qos_compatible=self._qos_compatible(name),
+                qos_compatible=(self._qos_compatible(name) if name in self._topic_qos else True),
             )
 
         service_types = dict(self._node.get_service_names_and_types())
         services = {
-            str(expected["name"]): EndpointObservation(
-                types=tuple(service_types.get(str(expected["name"]), ())),
-                servers=self._node.count_services(str(expected["name"])),
+            name: EndpointObservation(
+                types=tuple(service_types.get(name, ())),
+                servers=self._node.count_services(name),
             )
-            for expected in self._expected_graph["services"]
+            for name in self._observed_names("services")
         }
         action_types = dict(self._get_action_names_and_types(self._node))
         actions = {
-            str(expected["name"]): EndpointObservation(
-                types=tuple(action_types.get(str(expected["name"]), ())),
-                servers=int(str(expected["name"]) in action_types),
+            name: EndpointObservation(
+                types=tuple(action_types.get(name, ())),
+                servers=int(name in action_types),
             )
-            for expected in self._expected_graph["actions"]
+            for name in self._observed_names("actions")
         }
         lifecycle = {
             name: tracker.observation

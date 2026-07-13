@@ -9,6 +9,14 @@ from typing import Any, Protocol
 
 from robotics_acceptance_harness.documents import DocumentBundle
 from robotics_acceptance_harness.evidence import VerifiedEvidence, load_evidence_index
+from robotics_acceptance_harness.forbidden_graph import (
+    ForbiddenGraphMonitor,
+    ForbiddenGraphObservation,
+)
+from robotics_acceptance_harness.hardware_timing import (
+    HardwareTimingObservation,
+    evaluate_hardware_timing,
+)
 from robotics_acceptance_harness.metrics import MetricSample, evaluate_metric_assertions
 from robotics_acceptance_harness.otel import load_otlp_json_metrics
 from robotics_acceptance_harness.readiness import (
@@ -22,7 +30,11 @@ from robotics_acceptance_harness.result import (
     write_result_json,
 )
 from robotics_acceptance_harness.ros import RosGraphObserver
-from robotics_acceptance_harness.timing import ClockSample, evaluate_timing
+from robotics_acceptance_harness.timing import (
+    ClockSample,
+    TimingObservation,
+    evaluate_timing,
+)
 
 
 class ClockObserver(GraphObserver, Protocol):
@@ -72,6 +84,9 @@ def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
         "model_manifest_sha256": bundle.model.sha256 if bundle.model else None,
         "dataset_manifest_sha256": bundle.dataset.sha256 if bundle.dataset else None,
         "permit_sha256": bundle.permit.sha256 if bundle.permit else None,
+        "execution_verification_sha256": (
+            bundle.verification.sha256 if bundle.verification else None
+        ),
         "expected_ros_graph": {
             kind: len(scenario["expected_ros_graph"][kind])
             for kind in ("topics", "services", "actions", "lifecycle_nodes")
@@ -81,9 +96,15 @@ def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
             "upload_mode": scenario["evidence_policy"]["upload_mode"],
             "retention_class": scenario["evidence_policy"]["retention_class"],
         },
-        "policy": "accepted-simulation"
-        if scenario["execution"]["target_environment"] == "simulation"
-        else "requires-qualified-physical-release",
+        "policy": (
+            "accepted-simulation"
+            if scenario["execution"]["target_environment"] == "simulation"
+            else (
+                "authorized-physical-observation"
+                if bundle.scenario.schema_version == "acceptance-scenario.v3"
+                else "requires-qualified-physical-release"
+            )
+        ),
     }
 
 
@@ -151,17 +172,39 @@ def run_verification(
     utc_now: Callable[[], datetime] = _utc_now,
     poll_interval_sec: float = 0.05,
 ) -> VerificationOutputs:
-    """Attach to a running simulation and produce canonical acceptance outputs."""
+    """Attach to a running execution and produce canonical acceptance outputs."""
 
-    if bundle.runtime is None or bundle.scenario.schema_version != "acceptance-scenario.v2":
-        raise VerificationError("verify requires acceptance-scenario.v2 and a runtime manifest")
+    scenario_version = bundle.scenario.schema_version
+    if bundle.runtime is None or scenario_version not in {
+        "acceptance-scenario.v2",
+        "acceptance-scenario.v3",
+    }:
+        raise VerificationError("verify requires an acceptance-scenario.v2 or v3 bundle")
     scenario = bundle.scenario.data
     execution = scenario["execution"]
-    if execution["target_environment"] != "simulation":
+    physical = execution["target_environment"] in {"hil", "real_robot"}
+    if scenario_version == "acceptance-scenario.v2" and physical:
         raise VerificationError("v0.5 verification is qualified only for simulation")
+    if physical and otel_metrics_path is None:
+        raise VerificationError("physical observation requires --otel-metrics evidence")
+    if physical and metric_samples:
+        raise VerificationError("physical observation requires file-backed OTLP evidence")
     result_id = str(scenario["scenario_id"])
     observe_clock = execution["time_mode"] != "hardware_realtime"
-    observer = observer_factory(scenario["expected_ros_graph"], observe_clock=observe_clock)
+    forbidden_monitor = (
+        ForbiddenGraphMonitor(scenario["forbidden_ros_graph"])
+        if scenario_version == "acceptance-scenario.v3"
+        else None
+    )
+    observer = observer_factory(
+        scenario["expected_ros_graph"],
+        observe_clock=observe_clock,
+        forbidden_graph=(
+            scenario["forbidden_ros_graph"]
+            if scenario_version == "acceptance-scenario.v3"
+            else None
+        ),
+    )
     started_at = utc_now()
     measurement_started_ns = 0
     measurement_finished_ns = 0
@@ -175,6 +218,7 @@ def run_verification(
             poll_interval_sec=poll_interval_sec,
             now_ns=now_ns,
             sleep_fn=sleep_fn,
+            on_snapshot=forbidden_monitor.observe if forbidden_monitor is not None else None,
         )
         measurement_started_ns = now_ns()
         deadline_ns = measurement_started_ns + int(
@@ -183,6 +227,8 @@ def run_verification(
         last_snapshot = readiness.snapshot
         while now_ns() < deadline_ns:
             last_snapshot = observer.snapshot()
+            if forbidden_monitor is not None:
+                forbidden_monitor.observe(last_snapshot)
             remaining_sec = max(0.0, (deadline_ns - now_ns()) / 1_000_000_000)
             sleep_fn(min(poll_interval_sec, remaining_sec))
         measurement_finished_ns = now_ns()
@@ -203,6 +249,7 @@ def run_verification(
         now_ns=now_ns,
         sleep_fn=sleep_fn,
     )
+    metrics_evidence_sha256: str | None = None
     if otel_metrics_path is not None:
         if metric_samples:
             raise VerificationError("provide metric_samples or otel_metrics_path, not both")
@@ -212,19 +259,36 @@ def run_verification(
             raise VerificationError(
                 "OTLP metrics must be a verified local application/json evidence segment"
             )
+        metrics_evidence_sha256 = str(metric_link["sha256"])
         metric_samples = load_otlp_json_metrics(metrics_path)
     readiness = ReadinessResult(
         snapshot=last_snapshot,
         first_ready_at_ns=readiness.first_ready_at_ns,
         stable_for_sec=readiness.stable_for_sec,
     )
-    clock_samples = _enrich_clock_samples(
-        str(execution["time_mode"]),
-        raw_clock_samples,
-        metric_samples,
-    )
-    timing = evaluate_timing(execution, scenario["time_policy"], clock_samples)
+    hardware_timing: HardwareTimingObservation | None = None
+    if physical:
+        hardware_timing = evaluate_hardware_timing(scenario["time_policy"], metric_samples)
+        timing = TimingObservation(
+            monotonic=hardware_timing.monotonic,
+            offset_ms=hardware_timing.offset_ms,
+            drift_ppm=hardware_timing.drift_ppm,
+            real_time_factor=0.0,
+            deadline_miss_ratio=0.0,
+            max_message_age_ms=hardware_timing.max_sample_age_ms,
+            clock_hz=0.0,
+        )
+    else:
+        clock_samples = _enrich_clock_samples(
+            str(execution["time_mode"]),
+            raw_clock_samples,
+            metric_samples,
+        )
+        timing = evaluate_timing(execution, scenario["time_policy"], clock_samples)
     assertions = evaluate_metric_assertions(scenario["assertions"], metric_samples)
+    forbidden_observation: ForbiddenGraphObservation | None = (
+        forbidden_monitor.result() if forbidden_monitor is not None else None
+    )
     finished_at = utc_now()
     result = build_acceptance_result(
         result_id=result_id,
@@ -241,6 +305,9 @@ def run_verification(
             "evidence_index_finalized": True,
         },
         evidence_index=evidence,
+        forbidden_graph=forbidden_observation,
+        hardware_timing=hardware_timing,
+        hardware_timing_evidence_sha256=metrics_evidence_sha256,
     )
     destination = Path(output_dir).expanduser().resolve()
     result_path = write_result_json(result, destination / "acceptance-result.json")

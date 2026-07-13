@@ -7,7 +7,7 @@ allow-direct-references = true
 
 [project]
 name = "robotics-acceptance-harness"
-version = "0.5.1"
+version = "0.6.0"
 description = "Attach-only acceptance observer for validated robotics executions."
 requires-python = ">=3.12,<3.14"
 readme = "README.md"
@@ -28,7 +28,7 @@ dependencies = [
   "opentelemetry-proto==1.43.0",
   "pytest>=8,<10",
   "pyyaml>=6.0.2,<7",
-  "robotics-runtime-contracts @ https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.4.3/robotics_runtime_contracts-0.4.3-py3-none-any.whl",
+  "robotics-runtime-contracts @ https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.5.0/robotics_runtime_contracts-0.5.0-py3-none-any.whl",
 ]
 
 [project.scripts]
@@ -70,7 +70,6 @@ skip_covered = true
 python_version = "3.12"
 strict = true
 warn_unused_ignores = true
-exclude = ["^src/robotics_simulation_harness/"]
 
 [[tool.mypy.overrides]]
 module = ["junitparser.*", "opentelemetry.*"]

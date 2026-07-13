@@ -17,6 +17,7 @@ def _add_bundle_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", metavar="PATH")
     parser.add_argument("--dataset", metavar="PATH")
     parser.add_argument("--permit", metavar="PATH")
+    parser.add_argument("--verification", metavar="PATH")
     parser.add_argument(
         "--extension-schema",
         action="append",
@@ -37,7 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     explain = subparsers.add_parser("explain", help="Validate and explain an execution bundle.")
     _add_bundle_arguments(explain)
 
-    verify = subparsers.add_parser("verify", help="Observe and evaluate a running simulation.")
+    verify = subparsers.add_parser("verify", help="Observe and evaluate a running execution.")
     _add_bundle_arguments(verify)
     verify.add_argument("--evidence-index", required=True, metavar="PATH")
     verify.add_argument(
@@ -72,6 +73,7 @@ def _bundle(arguments: argparse.Namespace) -> DocumentBundle:
         model_path=arguments.model,
         dataset_path=arguments.dataset,
         permit_path=arguments.permit,
+        verification_path=arguments.verification,
         extension_schemas=_extension_schemas(arguments.extension_schema),
     )
 
