@@ -217,3 +217,26 @@ def test_ros_observer_context_manager_detaches() -> None:
         observer.snapshot()
 
     assert node.destroyed
+
+
+def test_ros_observer_queries_forbidden_names_without_subscribing() -> None:
+    node = FakeNode()
+    modules = fake_modules(node)
+    observer = RosGraphObserver(
+        expected_graph(),
+        forbidden_graph={
+            "topics": ["/cmd_vel"],
+            "services": ["/arm"],
+            "actions": ["/land"],
+        },
+        observe_clock=False,
+        module_loader=modules.__getitem__,
+    )
+
+    snapshot = observer.snapshot()
+
+    assert snapshot.topics["/cmd_vel"].publishers == 1
+    assert snapshot.services["/arm"].servers == 1
+    assert snapshot.actions["/land"].servers == 0
+    assert "/cmd_vel" not in node.callbacks
+    observer.close()

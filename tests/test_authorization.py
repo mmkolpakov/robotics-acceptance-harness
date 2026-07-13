@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
@@ -93,9 +94,7 @@ def test_verified_target_identity_must_match_permit(tmp_path: Path) -> None:
     with pytest.raises(BundleValidationError) as caught:
         _mutated_verification_bundle(
             tmp_path,
-            lambda verification: verification["target"].update(
-                {"identity_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
-            ),
+            lambda verification: verification["target"].update({"identity_sha256": "b" * 64}),
         )
 
     assert caught.value.json_path == "$.verification.target.identity_sha256"
@@ -108,8 +107,7 @@ def test_verified_trust_policy_must_match_scenario(tmp_path: Path) -> None:
             lambda verification: verification.update(
                 {
                     "trust_policy_sha256": (
-                        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                     )
                 }
             ),

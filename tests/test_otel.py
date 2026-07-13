@@ -12,6 +12,14 @@ def test_loads_standard_otlp_json_number_points(tmp_path: Path) -> None:
     payload = {
         "resourceMetrics": [
             {
+                "resource": {
+                    "attributes": [
+                        {
+                            "key": "robotics.clock.sync_protocol",
+                            "value": {"stringValue": "ptp"},
+                        }
+                    ]
+                },
                 "scopeMetrics": [
                     {
                         "metrics": [
@@ -23,6 +31,12 @@ def test_loads_standard_otlp_json_number_points(tmp_path: Path) -> None:
                                         {
                                             "timeUnixNano": "1000000000",
                                             "asDouble": 12.5,
+                                            "attributes": [
+                                                {
+                                                    "key": "robotics.clock.source",
+                                                    "value": {"stringValue": "pmc"},
+                                                }
+                                            ],
                                         }
                                     ]
                                 },
@@ -43,7 +57,7 @@ def test_loads_standard_otlp_json_number_points(tmp_path: Path) -> None:
                             },
                         ]
                     }
-                ]
+                ],
             }
         ]
     }
@@ -56,6 +70,11 @@ def test_loads_standard_otlp_json_number_points(tmp_path: Path) -> None:
         ("robotics.message.age", 12.5, "ms"),
         ("robotics.message.lost", 0.0, "1"),
     ]
+    assert samples[0].attributes == {
+        "robotics.clock.sync_protocol": "ptp",
+        "robotics.clock.source": "pmc",
+    }
+    assert samples[1].attributes == {"robotics.clock.sync_protocol": "ptp"}
 
 
 def test_invalid_otlp_json_reports_line(tmp_path: Path) -> None:

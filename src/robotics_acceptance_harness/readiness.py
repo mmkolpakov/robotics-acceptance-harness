@@ -215,6 +215,7 @@ def wait_for_readiness(
     poll_interval_sec: float = 0.1,
     now_ns: Callable[[], int] = monotonic_ns,
     sleep_fn: Callable[[float], None] = sleep,
+    on_snapshot: Callable[[GraphSnapshot], None] | None = None,
 ) -> ReadinessResult:
     """Wait until every endpoint remains ready for one uninterrupted window."""
 
@@ -230,6 +231,8 @@ def wait_for_readiness(
 
     while True:
         snapshot = observer.snapshot()
+        if on_snapshot is not None:
+            on_snapshot(snapshot)
         current_ns = now_ns()
         last_issues = evaluate_graph(expected_graph, snapshot)
         elapsed_sec = (current_ns - started_at_ns) / 1_000_000_000

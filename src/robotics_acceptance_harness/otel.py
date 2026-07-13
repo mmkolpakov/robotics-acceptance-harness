@@ -9,7 +9,7 @@ from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
     ExportMetricsServiceRequest,
 )
 
-from robotics_acceptance_harness.metrics import MetricSample
+from robotics_acceptance_harness.metrics import MetricAttribute, MetricSample
 
 
 class MetricInputError(ValueError):
@@ -23,6 +23,28 @@ def _number_value(point: Any) -> float | None:
     if value_kind == "as_int":
         return float(point.as_int)
     return None
+
+
+def _attribute_value(value: Any) -> MetricAttribute | None:
+    value_kind = value.WhichOneof("value")
+    if value_kind == "string_value":
+        return str(value.string_value)
+    if value_kind == "bool_value":
+        return bool(value.bool_value)
+    if value_kind == "int_value":
+        return int(value.int_value)
+    if value_kind == "double_value":
+        return float(value.double_value)
+    return None
+
+
+def _attributes(items: Any) -> dict[str, MetricAttribute]:
+    attributes: dict[str, MetricAttribute] = {}
+    for item in items:
+        value = _attribute_value(item.value)
+        if value is not None:
+            attributes[str(item.key)] = value
+    return attributes
 
 
 def load_otlp_json_metrics(path: str | Path) -> tuple[MetricSample, ...]:
@@ -47,7 +69,12 @@ def load_otlp_json_metrics(path: str | Path) -> tuple[MetricSample, ...]:
             ) from error
 
         for resource_metrics in request.resource_metrics:
+            resource_attributes = _attributes(resource_metrics.resource.attributes)
             for scope_metrics in resource_metrics.scope_metrics:
+                scope_attributes = {
+                    **resource_attributes,
+                    **_attributes(scope_metrics.scope.attributes),
+                }
                 for metric in scope_metrics.metrics:
                     data_kind = metric.WhichOneof("data")
                     if data_kind not in {"gauge", "sum"}:
@@ -63,6 +90,10 @@ def load_otlp_json_metrics(path: str | Path) -> tuple[MetricSample, ...]:
                                 value=value,
                                 unit=metric.unit,
                                 observed_at_ns=int(point.time_unix_nano),
+                                attributes={
+                                    **scope_attributes,
+                                    **_attributes(point.attributes),
+                                },
                             )
                         )
     return tuple(samples)

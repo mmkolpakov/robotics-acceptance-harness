@@ -3,9 +3,12 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from statistics import fmean
+from types import MappingProxyType
 from typing import Any, Literal
+
+MetricAttribute = str | bool | int | float
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +17,10 @@ class MetricSample:
     value: float
     unit: str
     observed_at_ns: int
+    attributes: Mapping[str, MetricAttribute] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attributes", MappingProxyType(dict(self.attributes)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,4 +132,9 @@ def evaluate_metric_assertions(
     return tuple(evaluations)
 
 
-__all__ = ["AssertionEvaluation", "MetricSample", "evaluate_metric_assertions"]
+__all__ = [
+    "AssertionEvaluation",
+    "MetricAttribute",
+    "MetricSample",
+    "evaluate_metric_assertions",
+]
