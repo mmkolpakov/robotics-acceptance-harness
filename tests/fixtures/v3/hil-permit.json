@@ -1,0 +1,30 @@
+{
+  "schema_version": "execution-permit.v2",
+  "predicate_type": "https://robotics-runtime-contracts.dev/attestations/execution-permit/v2",
+  "permit_id": "org.example.hil-permit-001",
+  "scenario_sha256": "3af5fa4184f492b8560f548ce8e65749ce6025333d83f4f5abe99c03ff7236ac",
+  "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "trust_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "target": {
+    "environment": "hil",
+    "target_id": "controller-alpha",
+    "identity_kind": "mavlink_system_component",
+    "identity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "allowed_physical_effect": "none",
+  "hardware_scope": [
+    "compute",
+    "controller"
+  ],
+  "issued_at": "2026-07-12T09:55:00Z",
+  "expires_at": "2026-07-12T10:10:00Z",
+  "nonce": "0123456789abcdef0123456789abcdef",
+  "operator_id": "operator@example.org",
+  "approver_id": "safety@example.org",
+  "interlock_check": {
+    "reference": "s3://robotics-evidence/interlocks/controller-alpha.json",
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "status": "passed",
+    "checked_at": "2026-07-12T09:54:00Z"
+  }
+}

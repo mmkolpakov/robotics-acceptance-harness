@@ -11,6 +11,8 @@ from typing import Any, cast
 import yaml
 from robotics_runtime_contracts import validate_document
 
+from robotics_acceptance_harness.authorization import evaluate_physical_authorization
+
 
 class BundleValidationError(ValueError):
     """Raised when individually valid execution documents contradict each other."""
@@ -47,6 +49,7 @@ class DocumentBundle:
     model: LoadedDocument | None = None
     dataset: LoadedDocument | None = None
     permit: LoadedDocument | None = None
+    verification: LoadedDocument | None = None
 
 
 def _read_mapping(path: Path) -> tuple[bytes, dict[str, Any]]:
@@ -263,6 +266,7 @@ def load_bundle(
     model_path: str | Path | None = None,
     dataset_path: str | Path | None = None,
     permit_path: str | Path | None = None,
+    verification_path: str | Path | None = None,
     extension_schemas: Mapping[str, bytes | str] | None = None,
     now: datetime | None = None,
 ) -> DocumentBundle:
@@ -270,22 +274,34 @@ def load_bundle(
 
     scenario = load_document(
         scenario_path,
-        expected_schemas={"acceptance-scenario.v1", "acceptance-scenario.v2"},
+        expected_schemas={
+            "acceptance-scenario.v1",
+            "acceptance-scenario.v2",
+            "acceptance-scenario.v3",
+        },
         extension_schemas=extension_schemas,
     )
     if scenario.schema_version == "acceptance-scenario.v1":
-        if any(path is not None for path in (runtime_path, model_path, dataset_path, permit_path)):
+        if any(
+            path is not None
+            for path in (runtime_path, model_path, dataset_path, permit_path, verification_path)
+        ):
             raise BundleValidationError("$", "v1 scenario accepts no execution manifests")
         return DocumentBundle(scenario=scenario)
 
     if runtime_path is None:
         raise BundleValidationError(
             "$.runtime",
-            "acceptance-scenario.v2 requires a runtime manifest",
+            f"{scenario.schema_version} requires a runtime manifest",
         )
+    runtime_schemas = (
+        {"runtime-manifest.v3"}
+        if scenario.schema_version == "acceptance-scenario.v3"
+        else {"runtime-manifest.v1", "runtime-manifest.v2"}
+    )
     runtime = load_document(
         runtime_path,
-        expected_schemas={"runtime-manifest.v1", "runtime-manifest.v2"},
+        expected_schemas=runtime_schemas,
     )
     model = (
         load_document(model_path, expected_schemas={"model-artifact-manifest.v1"})
@@ -297,27 +313,63 @@ def load_bundle(
         if dataset_path is not None
         else None
     )
+    permit_schemas = (
+        {"execution-permit.v2"}
+        if scenario.schema_version == "acceptance-scenario.v3"
+        else {"execution-permit.v1"}
+    )
     permit = (
-        load_document(permit_path, expected_schemas={"execution-permit.v1"})
+        load_document(permit_path, expected_schemas=permit_schemas)
         if permit_path is not None
+        else None
+    )
+    verification = (
+        load_document(
+            verification_path,
+            expected_schemas={"execution-verification.v1"},
+        )
+        if verification_path is not None
         else None
     )
 
     _validate_execution_alignment(scenario.data, runtime.data)
     _validate_model_alignment(scenario.data, runtime.data, model)
     _validate_dataset_alignment(scenario.data, dataset)
-    _validate_permit_alignment(
-        scenario,
-        runtime.data,
-        permit,
-        now or datetime.now(UTC),
-    )
+    checked_at = now or datetime.now(UTC)
+    if scenario.schema_version == "acceptance-scenario.v3":
+        issues = evaluate_physical_authorization(
+            scenario=scenario.data,
+            scenario_sha256=scenario.sha256,
+            runtime=runtime.data,
+            permit=permit.data if permit is not None else None,
+            permit_sha256=permit.sha256 if permit is not None else None,
+            permit_path=permit.path if permit is not None else None,
+            verification=verification.data if verification is not None else None,
+            verification_sha256=verification.sha256 if verification is not None else None,
+            verification_path=verification.path if verification is not None else None,
+            now=checked_at,
+        )
+        if issues:
+            raise BundleValidationError(issues[0].json_path, issues[0].message)
+    else:
+        if verification is not None:
+            raise BundleValidationError(
+                "$.verification",
+                "acceptance-scenario.v2 does not accept execution verification",
+            )
+        _validate_permit_alignment(
+            scenario,
+            runtime.data,
+            permit,
+            checked_at,
+        )
     return DocumentBundle(
         scenario=scenario,
         runtime=runtime,
         model=model,
         dataset=dataset,
         permit=permit,
+        verification=verification,
     )
 
 

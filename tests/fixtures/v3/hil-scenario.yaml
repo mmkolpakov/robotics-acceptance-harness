@@ -1,0 +1,61 @@
+schema_version: acceptance-scenario.v3
+scenario_id: org.example.controller-hil-observation
+execution:
+  target_environment: hil
+  hardware_scope:
+    - compute
+    - controller
+  physical_effect: none
+  test_intent: safety_evidence
+  data_source: live_target
+  plant_backend: real_hardware
+  time_mode: hardware_realtime
+  data_plane_profile: secure_shared_memory
+  security_profile: sros2_enforce
+authorization:
+  mode: signed_execution_permit
+  permit_schema: execution-permit.v2
+  verification_schema: execution-verification.v1
+  trust_policy_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  two_party_approval: true
+forbidden_ros_graph:
+  topics:
+    - /cmd_vel
+  services: []
+  actions: []
+seed: 42
+timeouts:
+  startup_sec: 60
+  graph_ready_sec: 30
+  stable_for_sec: 3
+  execution_sec: 120
+  shutdown_sec: 30
+expected_ros_graph:
+  topics: []
+  services: []
+  actions: []
+  lifecycle_nodes: []
+assertions: []
+time_policy:
+  clock_sync_protocol: mavlink_timesync
+  max_clock_offset_ms: 5
+  max_clock_drift_ppm: 20
+  max_message_age_ms: 50
+data_plane_policy:
+  max_message_age_ms: 50
+  max_loss_ratio: 0
+  shm_transport: true
+  data_sharing: false
+  private_ipc: true
+evidence_policy:
+  topics: []
+  recording_mode: bounded
+  compression: zstd
+  max_segment_size_bytes: 1048576
+  max_segment_duration_sec: 60
+  max_spool_size_bytes: 1048576
+  spool_high_watermark_ratio: 0.85
+  max_upload_lag_sec: 120
+  upload_mode: closed_segments_during_run
+  retention_class: hil-30d
+  remote_sink_allowed: true

@@ -72,6 +72,9 @@ def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
         "model_manifest_sha256": bundle.model.sha256 if bundle.model else None,
         "dataset_manifest_sha256": bundle.dataset.sha256 if bundle.dataset else None,
         "permit_sha256": bundle.permit.sha256 if bundle.permit else None,
+        "execution_verification_sha256": (
+            bundle.verification.sha256 if bundle.verification else None
+        ),
         "expected_ros_graph": {
             kind: len(scenario["expected_ros_graph"][kind])
             for kind in ("topics", "services", "actions", "lifecycle_nodes")
@@ -81,9 +84,15 @@ def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
             "upload_mode": scenario["evidence_policy"]["upload_mode"],
             "retention_class": scenario["evidence_policy"]["retention_class"],
         },
-        "policy": "accepted-simulation"
-        if scenario["execution"]["target_environment"] == "simulation"
-        else "requires-qualified-physical-release",
+        "policy": (
+            "accepted-simulation"
+            if scenario["execution"]["target_environment"] == "simulation"
+            else (
+                "authorized-physical-observation"
+                if bundle.scenario.schema_version == "acceptance-scenario.v3"
+                else "requires-qualified-physical-release"
+            )
+        ),
     }
 
 
