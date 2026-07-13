@@ -49,8 +49,8 @@ jobs:
           uv pip install --python .wheel-venv/bin/python artifacts/dist/*.whl
           .wheel-venv/bin/robotics-acceptance --version
           .wheel-venv/bin/robotics-acceptance explain \
-            --scenario tests/fixtures/v2/simulation.yaml \
-            --runtime tests/fixtures/v2/runtime.yaml \
+            --scenario tests/fixtures/v3/simulation.yaml \
+            --runtime tests/fixtures/v3/runtime.yaml \
             > artifacts/installed-wheel-explain.json
           .wheel-venv/bin/pytest --help | grep -- --robotics-scenario
       - name: Upload validation artifacts

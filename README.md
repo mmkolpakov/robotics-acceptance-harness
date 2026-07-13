@@ -4,40 +4,39 @@
 [![Release](https://img.shields.io/github/v/release/mmkolpakov/robotics-acceptance-harness)](https://github.com/mmkolpakov/robotics-acceptance-harness/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Attach-only acceptance observation for an already running ROS 2 system.
+Attach-only acceptance observation for an already running ROS 2 execution.
 
 The harness validates versioned execution documents, waits for the declared ROS
-graph and lifecycle state, evaluates timing and OpenTelemetry metrics, verifies
-finalized evidence, and writes an acceptance result plus JUnit XML. It does not
-start containers, launch ROS nodes, control Gazebo, change lifecycle state, or
-send commands to a robot.
+graph and lifecycle states, evaluates OpenTelemetry metrics and timing, verifies
+finalized evidence, and writes a contract-valid result plus JUnit XML. It does
+not start containers, launch nodes, change lifecycle state, control a simulator,
+verify signatures, or send commands to physical equipment.
 
-## Requirements
+## Supported Baseline
 
-| Component | Supported baseline |
+| Component | Baseline |
 | --- | --- |
-| Python | 3.12 or 3.13 |
-| Contracts | `robotics-runtime-contracts` 0.4.3 |
-| ROS observation | ROS 2 Jazzy with `rclpy` and the declared message packages |
-| Metrics | OTLP JSON produced by the OpenTelemetry Collector file exporter |
+| Python | 3.12 and 3.13 |
+| Contracts | `robotics-runtime-contracts` 0.5.0 |
+| Canonical documents | scenario v3, runtime v3, result v3 |
+| Compatibility input | v1 standalone scenario; v2 simulation bundle |
+| ROS observation | ROS 2 Jazzy with `rclpy` and declared message packages |
+| Metrics | newline-delimited OTLP JSON from the Collector file exporter |
 
-`explain` needs only Python. `verify` runs inside a ROS-enabled environment and
+`explain` needs only Python. `verify` runs in a ROS-enabled environment and
 joins the existing `ROS_DOMAIN_ID`.
 
 ## Install
 
-The current release is 0.5.1. Install its attested wheel directly from the
-GitHub Release:
-
 ```bash
 python -m pip install \
-  https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.5.1/robotics_acceptance_harness-0.5.1-py3-none-any.whl
+  https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.6.0/robotics_acceptance_harness-0.6.0-py3-none-any.whl
 robotics-acceptance --version
 ```
 
-Use the released acceptance-observer OCI image from `robotics-runtime-infra`
-when `verify` needs ROS 2 Jazzy and `rclpy`. A plain Python environment is
-sufficient for `explain` and the pytest plugin.
+Use the acceptance-observer image from `robotics-runtime-infra` when ROS 2
+Jazzy packages are required. A plain Python environment is sufficient for
+`explain` and the pytest plugin.
 
 ## Quick Start
 
@@ -46,135 +45,130 @@ From a checkout:
 ```bash
 uv sync --locked
 uv run robotics-acceptance explain \
-  --scenario tests/fixtures/v2/simulation.yaml \
-  --runtime tests/fixtures/v2/runtime.yaml
+  --scenario tests/fixtures/v3/simulation.yaml \
+  --runtime tests/fixtures/v3/runtime.yaml
 ```
 
-The command validates every document and prints the resolved execution mode,
-workload, graph size, evidence policy, and content digests. It does not connect
-to ROS.
+This validates the bundle and prints its execution mode, workload, graph size,
+evidence policy, and content digests without connecting to ROS.
 
-## Verify A Run
+## Verify an Execution
 
-Start the simulation, recorder, and OpenTelemetry Collector with the runtime
-infrastructure or the consuming project. Then attach the observer:
+Start the runtime, recorder, and OpenTelemetry Collector outside the harness,
+then attach the observer:
 
 ```bash
 robotics-acceptance verify \
   --scenario /run/robotics/scenario.yaml \
-  --runtime /run/robotics/runtime-manifest.yaml \
+  --runtime /run/robotics/runtime-manifest.json \
   --evidence-index /run/robotics/evidence-index.json \
-  --otel-metrics /run/robotics/metrics.json \
+  --otel-metrics /run/robotics/metrics.otlp.json \
   --output /run/robotics/results
 ```
 
-The observer waits for endpoint and lifecycle readiness, measures for the
-scenario's `execution_sec`, detaches, and then waits up to `shutdown_sec` for an
-atomically published evidence index. The OTLP metrics file is accepted only
-when that finalized index covers its exact size and SHA-256 digest.
-
-Outputs:
+The command exits `0` for `passed`, `1` for a completed failed verdict, and `2`
+for invalid input or an observation error. Outputs are written atomically:
 
 ```text
 /run/robotics/results/acceptance-result.json
 /run/robotics/results/junit.xml
 ```
 
-The command exits `0` for `passed`, `1` for a completed failed verdict, and `2`
-for invalid input or an observation error.
+The OTLP file is accepted only when the finalized evidence index covers its
+exact path, media type, size, and SHA-256 digest.
 
 ## Inputs
 
-| Input | When required | Contract or format |
+| Input | Required | Contract |
 | --- | --- | --- |
-| Scenario | Always | `acceptance-scenario.v2` |
-| Runtime manifest | Scenario v2 | `runtime-manifest.v1` or `.v2` |
+| Scenario | Always | `acceptance-scenario.v3` |
+| Runtime manifest | v3 scenario | `runtime-manifest.v3` |
 | Model manifest | Inference workload | `model-artifact-manifest.v1` |
 | Dataset manifest | MCAP playback | `dataset-manifest.v1` |
-| Execution permit | Reserved for qualified physical releases | `execution-permit.v1` |
+| Execution permit | HIL and real target | `execution-permit.v2` JSON |
+| Verification record | HIL and real target | `execution-verification.v1` |
 | Evidence index | `verify` | `evidence-index.v1` |
-| Metrics | Metric assertions and real-time simulation | OTLP JSON, newline-delimited |
+| Metrics | Physical observation and metric assertions | OTLP JSON |
 
-Local domain extensions are passed without network access:
+Local domain extensions remain digest-pinned and local:
 
 ```bash
 robotics-acceptance explain \
   --scenario scenario.yaml \
-  --runtime runtime.yaml \
+  --runtime runtime.json \
   --extension-schema org.example.sorting=sorting-extension.schema.json
 ```
 
-The scenario declares the extension schema's canonical ID and SHA-256 digest.
-The common safety, time, transport, and evidence rules cannot be overridden.
+Extensions cannot override common safety, time, transport, or evidence rules.
 
-## Readiness
+## Execution Scope
 
-For each declared topic, the harness checks the ROS type, publisher and
-subscriber counts, requested QoS compatibility, and first-message deadline.
-Services and actions require a discovered server. Managed nodes must report
-`active` through their standard `get_state` service for the complete stability
-window. The harness never requests a lifecycle transition.
-
-The observer's own subscriptions are excluded from subscriber counts, so it
-cannot satisfy the scenario merely by attaching itself.
-
-## Execution Modes
-
-Version 0.5 accepts simulation targets only:
-
-| Mode | Verdict scope |
+| Target | Supported verdict scope |
 | --- | --- |
-| `simulation_realtime` | Functional assertions plus real-time factor and deadline limits |
-| `simulation_stepped` | Functional and deterministic assertions, not performance |
-| `playback_clocked` | Open-loop evaluation against an immutable MCAP dataset |
-| `hardware_realtime` | Rejected until the HIL and real-target qualification releases |
+| Simulation | Real-time, stepped, and MCAP playback observation |
+| HIL | Read-only observation with `physical_effect: none` |
+| Real robot | Read-only observation with `physical_effect: observation` |
 
-The runtime owner controls Gazebo stepping, PX4 lockstep, rosbag playback,
-recording, and process shutdown. This separation keeps the measured system
-visible and prevents the observer from changing the result it evaluates.
+Physical actuation is outside version 0.6. The external infrastructure must
+verify two signatures and policy authorization before it creates the
+`execution-verification.v1` record. The harness then cross-checks the permit,
+verification, runtime image, target identity, hardware scope, policy digest,
+and validity interval. Hardware support is claimed only by the runtime's
+qualification matrix, not by installing this Python package.
 
-## Pytest Integration
+## Safety Observation
 
-The compatibility plugin still exposes validated documents to project-owned
-tests:
+For v3, every forbidden command topic, service, and action is observed across
+both graph readiness and the complete measurement window. The harness does not
+subscribe to forbidden-only topics. Any publisher or server, including a
+transient one, produces a failed result and JUnit test.
+
+For each expected topic, the harness checks type, publisher and subscriber
+counts, QoS compatibility, and first-message deadline. Services and actions
+require a server. Managed nodes must remain in their required state for the
+declared stability window. The observer never requests a lifecycle transition.
+
+## Hardware Timing
+
+Physical observation requires aligned OTLP gauge points at each collection
+timestamp:
+
+| Metric | Unit |
+| --- | --- |
+| `robotics.hardware.clock.offset` | `ms` |
+| `robotics.hardware.clock.drift` | `ppm` |
+| `robotics.hardware.message.age` | `ms` |
+| `robotics.hardware.clock.monotonic` | `1` |
+
+Every point carries string attributes `robotics.clock.sync_protocol` and
+`robotics.clock.source`. Units, metadata, sample alignment, protocol, clock
+offset, drift, message age, and monotonicity are checked fail-closed.
+
+## Pytest Plugin
+
+Project-owned simulation tests can consume validated documents directly:
 
 ```bash
 uv run pytest \
   --robotics-scenario scenario.yaml \
-  --robotics-runtime runtime.yaml
+  --robotics-runtime runtime.json
 ```
 
-Use the `robotics_bundle` fixture for all cross-checked manifests or the
-`robotics_scenario` fixture for the immutable scenario mapping. The plugin is
-simulation-only in version 0.5.
-
-## Troubleshooting
-
-- `rclpy ... must be available`: run `verify` in the ROS Jazzy observer image,
-  not in a plain Python virtual environment.
-- `no message before ...`: inspect the publisher, topic type, QoS, and
-  `ROS_DOMAIN_ID`; increasing the timeout should not hide an incompatible graph.
-- `deadline_miss_ratio was not observed`: export
-  `robotics.simulation.deadline_miss_ratio` through the Collector.
-- `OTLP metrics must be a verified ... segment`: stop and flush the Collector,
-  hash the final file, and publish the evidence index atomically.
-- `qualified only for simulation`: HIL and real targets remain fail-closed in
-  this release even when a permit document is present.
+Use `robotics_bundle` for the cross-checked bundle or `robotics_scenario` for
+the immutable scenario mapping. The plugin does not authorize physical tests.
 
 ## Development
 
 ```bash
 uv sync --locked --all-groups
 uv run pre-commit run --all-files
-uv run pytest \
+uv run coverage run --branch -m pytest \
   --robotics-scenario tests/fixtures/simulation.yaml
-uv build
+uv run coverage report --fail-under=80
+uv build --no-sources
 ```
 
-Semgrep enforces the attach-only API boundary and tests its own policy rules.
-See [the v0.4 to v0.5 migration guide](docs/migration-v0.4-v0.5.md) before
-upgrading an existing pytest integration.
-
-Security reports follow [SECURITY.md](SECURITY.md). Contributions follow
-[CONTRIBUTING.md](CONTRIBUTING.md). The project is available under the
-[MIT License](LICENSE).
+Semgrep enforces the attach-only boundary and tests its own policy rules. See
+[the 0.5 to 0.6 migration guide](docs/migration-v0.5-v0.6.md) for v3 adoption.
+Security reports follow [SECURITY.md](SECURITY.md), contributions follow
+[CONTRIBUTING.md](CONTRIBUTING.md), and the project uses the [MIT License](LICENSE).

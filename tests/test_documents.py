@@ -8,6 +8,7 @@ import yaml
 from robotics_acceptance_harness.documents import BundleValidationError, load_bundle
 
 FIXTURES = Path(__file__).parent / "fixtures" / "v2"
+V3_FIXTURES = Path(__file__).parent / "fixtures" / "v3"
 
 
 def test_load_bundle_cross_checks_v2_execution_documents() -> None:
@@ -20,6 +21,19 @@ def test_load_bundle_cross_checks_v2_execution_documents() -> None:
     assert bundle.runtime is not None
     assert bundle.runtime.schema_version == "runtime-manifest.v2"
     assert bundle.runtime.data["workload"]["kind"] == "none"
+
+
+def test_load_bundle_cross_checks_canonical_v3_simulation() -> None:
+    bundle = load_bundle(
+        V3_FIXTURES / "simulation.yaml",
+        runtime_path=V3_FIXTURES / "runtime.yaml",
+    )
+
+    assert bundle.scenario.schema_version == "acceptance-scenario.v3"
+    assert bundle.runtime is not None
+    assert bundle.runtime.schema_version == "runtime-manifest.v3"
+    assert bundle.permit is None
+    assert bundle.verification is None
 
 
 def test_load_bundle_rejects_runtime_mode_mismatch(tmp_path: Path) -> None:
