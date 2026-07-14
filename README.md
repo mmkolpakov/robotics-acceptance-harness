@@ -26,6 +26,18 @@ verify signatures, or send commands to physical equipment.
 `explain` needs only Python. `verify` runs in a ROS-enabled environment and
 joins the existing `ROS_DOMAIN_ID`.
 
+### Foundation compatibility
+
+| Foundation line | Contracts | Harness | Runtime infrastructure | Scope |
+| --- | --- | --- | --- | --- |
+| Published simulation baseline | 0.4.3 | 0.5.1 | [`v0.5.0`](https://github.com/mmkolpakov/robotics-runtime-infra/releases/tag/v0.5.0) | Scenario, runtime, and result v2 |
+| Physical-observation candidate | 0.5.0 | 0.6.0 | Unreleased source pinned to both release commits | Scenario, runtime, and result v3 |
+
+Installing this package does not qualify an accelerator or physical target.
+Those claims are defined by the runtime infrastructure's
+[support matrix](https://github.com/mmkolpakov/robotics-runtime-infra#support-status)
+for an exact source revision, image digest, and named device.
+
 ## Install
 
 ```bash
