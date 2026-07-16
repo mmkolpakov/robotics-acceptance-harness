@@ -17,28 +17,16 @@ _BUNDLE_KEY = pytest.StashKey[DocumentBundle]()
 
 
 def _target_environment(bundle: DocumentBundle) -> str:
-    scenario = bundle.scenario.data
-    if bundle.scenario.schema_version == "acceptance-scenario.v1":
-        return str(scenario["target_environment"])
-    return str(scenario["execution"]["target_environment"])
+    return str(bundle.scenario.data["execution"]["target_environment"])
 
 
 def _guard_target(bundle: DocumentBundle) -> None:
     target = _target_environment(bundle)
     if target != "simulation":
         raise pytest.UsageError(
-            "robotics-acceptance-harness accepts only target_environment=simulation in v0.5; "
+            "the pytest plugin accepts only target_environment=simulation; "
             f"rejected target_environment={target}"
         )
-
-
-def _load_scenario(path: Path) -> Any:
-    try:
-        bundle = load_bundle(path)
-    except BundleValidationError as error:
-        raise pytest.UsageError(f"invalid robotics scenario {path}: {error}") from error
-    _guard_target(bundle)
-    return bundle.scenario.data
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -55,7 +43,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         dest="robotics_runtime_path",
         metavar="PATH",
         default=None,
-        help="Path to a runtime-manifest file required by acceptance-scenario.v2.",
+        help="Path to the canonical runtime-manifest file.",
     )
     group.addoption(
         "--robotics-model",

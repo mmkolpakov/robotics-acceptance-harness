@@ -5,7 +5,7 @@ from pathlib import Path
 
 from robotics_acceptance_harness.cli import main
 
-FIXTURES = Path(__file__).parent / "fixtures" / "v2"
+FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
 
 
 def test_explain_validates_bundle_without_ros(capsys) -> None:
@@ -13,7 +13,7 @@ def test_explain_validates_bundle_without_ros(capsys) -> None:
         [
             "explain",
             "--scenario",
-            str(FIXTURES / "simulation.yaml"),
+            str(FIXTURES / "scenario.yaml"),
             "--runtime",
             str(FIXTURES / "runtime.yaml"),
         ]
@@ -30,7 +30,7 @@ def test_explain_rejects_invalid_extension_argument(capsys) -> None:
         [
             "explain",
             "--scenario",
-            str(FIXTURES / "simulation.yaml"),
+            str(FIXTURES / "scenario.yaml"),
             "--runtime",
             str(FIXTURES / "runtime.yaml"),
             "--extension-schema",

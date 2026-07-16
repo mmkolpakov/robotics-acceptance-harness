@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
-FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
 
 
 def run_isolated(pytester: pytest.Pytester, *args: str) -> pytest.RunResult:
@@ -27,29 +28,28 @@ def make_test(pytester: pytest.Pytester) -> Path:
     )
 
 
-def run_with_fixture(
-    pytester: pytest.Pytester,
-    fixture_name: str,
-) -> pytest.RunResult:
+def run_with_simulation(pytester: pytest.Pytester) -> pytest.RunResult:
     test_file = make_test(pytester)
     return run_isolated(
         pytester,
         test_file.name,
         "--robotics-scenario",
-        str(FIXTURES / fixture_name),
+        str(FIXTURES / "scenario.yaml"),
+        "--robotics-runtime",
+        str(FIXTURES / "runtime.yaml"),
     )
 
 
 def test_simulation_scenario_runs_tests(pytester: pytest.Pytester) -> None:
-    result = run_with_fixture(pytester, "simulation.yaml")
+    result = run_with_simulation(pytester)
     result.assert_outcomes(passed=1)
 
 
-def test_v2_bundle_runs_with_runtime_manifest(pytester: pytest.Pytester) -> None:
+def test_bundle_exposes_runtime_manifest(pytester: pytest.Pytester) -> None:
     test_file = pytester.makepyfile(
         """
         def test_bundle(robotics_bundle):
-            assert robotics_bundle.runtime.schema_version == "runtime-manifest.v2"
+            assert robotics_bundle.runtime.schema_version == "runtime-manifest.v1"
             assert robotics_bundle.runtime.data["workload"]["kind"] == "none"
         """
     )
@@ -57,35 +57,24 @@ def test_v2_bundle_runs_with_runtime_manifest(pytester: pytest.Pytester) -> None
         pytester,
         test_file.name,
         "--robotics-scenario",
-        str(FIXTURES / "v2" / "simulation.yaml"),
+        str(FIXTURES / "scenario.yaml"),
         "--robotics-runtime",
-        str(FIXTURES / "v2" / "runtime.yaml"),
+        str(FIXTURES / "runtime.yaml"),
     )
     result.assert_outcomes(passed=1)
 
 
-def test_v2_bundle_requires_runtime_manifest(pytester: pytest.Pytester) -> None:
+def test_bundle_requires_runtime_manifest(pytester: pytest.Pytester) -> None:
     test_file = make_test(pytester)
     result = run_isolated(
         pytester,
         test_file.name,
         "--robotics-scenario",
-        str(FIXTURES / "v2" / "simulation.yaml"),
+        str(FIXTURES / "scenario.yaml"),
     )
 
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     result.stderr.fnmatch_lines(["*requires a runtime manifest*"])
-
-
-@pytest.mark.parametrize("fixture_name", ["hil.yaml", "real-robot.yaml"])
-def test_non_simulation_target_stops_before_test_body(
-    pytester: pytest.Pytester,
-    fixture_name: str,
-) -> None:
-    result = run_with_fixture(pytester, fixture_name)
-
-    assert result.ret == pytest.ExitCode.USAGE_ERROR
-    result.stderr.fnmatch_lines(["*accepts only target_environment=simulation*"])
 
 
 def test_missing_scenario_option_is_a_usage_error(pytester: pytest.Pytester) -> None:
@@ -104,6 +93,8 @@ def test_malformed_yaml_is_a_usage_error(pytester: pytest.Pytester) -> None:
         test_file.name,
         "--robotics-scenario",
         str(scenario),
+        "--robotics-runtime",
+        str(FIXTURES / "runtime.yaml"),
     )
 
     assert result.ret == pytest.ExitCode.USAGE_ERROR
@@ -112,34 +103,20 @@ def test_malformed_yaml_is_a_usage_error(pytester: pytest.Pytester) -> None:
 
 def test_invalid_contract_reports_json_path(pytester: pytest.Pytester) -> None:
     test_file = make_test(pytester)
-    scenario = pytester.makefile(
-        ".yaml",
-        scenario="""
-        schema_version: acceptance-scenario.v1
-        scenario_id: invalid-target
-        target_environment: staging
-        seed: 0
-        timeouts:
-          startup_sec: 1
-          graph_ready_sec: 1
-          execution_sec: 1
-          shutdown_sec: 1
-        expected_ros_graph:
-          stable_for_sec: 0
-          topics: []
-          services: []
-          actions: []
-        """,
-    )
+    document = yaml.safe_load((FIXTURES / "scenario.yaml").read_text(encoding="utf-8"))
+    document["execution"]["target_environment"] = "staging"
+    scenario = pytester.makefile(".yaml", scenario=yaml.safe_dump(document))
     result = run_isolated(
         pytester,
         test_file.name,
         "--robotics-scenario",
         str(scenario),
+        "--robotics-runtime",
+        str(FIXTURES / "runtime.yaml"),
     )
 
     assert result.ret == pytest.ExitCode.USAGE_ERROR
-    result.stderr.fnmatch_lines(["*$.target_environment:*"])
+    result.stderr.fnmatch_lines(["*$.execution.target_environment:*"])
 
 
 def test_scenario_fixture_is_deeply_immutable(pytester: pytest.Pytester) -> None:
@@ -158,7 +135,9 @@ def test_scenario_fixture_is_deeply_immutable(pytester: pytest.Pytester) -> None
         pytester,
         test_file.name,
         "--robotics-scenario",
-        str(FIXTURES / "simulation.yaml"),
+        str(FIXTURES / "scenario.yaml"),
+        "--robotics-runtime",
+        str(FIXTURES / "runtime.yaml"),
     )
     result.assert_outcomes(passed=1)
 

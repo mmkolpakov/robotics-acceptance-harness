@@ -1,7 +1,7 @@
 {
   "schema_version": "execution-verification.v1",
   "verification_id": "org.example.hil-verification-001",
-  "permit_sha256": "9a014cd9ac23ca5f7ff616669fd8370031af29e3e18592e34ac0ecf89d7e47ce",
+  "permit_sha256": "28d40374f91cad0c73886796671c0a90a99c3ac4edb10256b21c5bb14b74e270",
   "statement_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
   "policy_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
   "trust_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

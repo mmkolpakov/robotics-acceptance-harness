@@ -40,7 +40,7 @@ def evaluate_physical_authorization(
     verification_path: Path | None,
     now: datetime,
 ) -> tuple[AuthorizationIssue, ...]:
-    """Cross-check v3 authorization facts without performing cryptography or I/O."""
+    """Cross-check authorization facts without performing cryptography or I/O."""
 
     issues: list[AuthorizationIssue] = []
     target_environment = scenario["execution"]["target_environment"]

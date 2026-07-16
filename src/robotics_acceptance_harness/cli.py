@@ -13,7 +13,7 @@ from robotics_acceptance_harness.documents import DocumentBundle, load_bundle
 
 def _add_bundle_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--scenario", required=True, metavar="PATH")
-    parser.add_argument("--runtime", metavar="PATH")
+    parser.add_argument("--runtime", required=True, metavar="PATH")
     parser.add_argument("--model", metavar="PATH")
     parser.add_argument("--dataset", metavar="PATH")
     parser.add_argument("--permit", metavar="PATH")

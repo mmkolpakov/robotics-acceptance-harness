@@ -61,19 +61,8 @@ def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
     """Return the validated execution facts without starting an observation."""
 
     scenario = bundle.scenario.data
-    if bundle.scenario.schema_version == "acceptance-scenario.v1":
-        return {
-            "schema_version": bundle.scenario.schema_version,
-            "scenario_sha256": bundle.scenario.sha256,
-            "target_environment": scenario["target_environment"],
-            "policy": "legacy-simulation-only",
-        }
     assert bundle.runtime is not None
-    workload_kind = (
-        "inference"
-        if bundle.runtime.schema_version == "runtime-manifest.v1"
-        else bundle.runtime.data["workload"]["kind"]
-    )
+    workload_kind = bundle.runtime.data["workload"]["kind"]
     return {
         "schema_version": bundle.scenario.schema_version,
         "scenario_id": scenario["scenario_id"],
@@ -99,11 +88,7 @@ def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
         "policy": (
             "accepted-simulation"
             if scenario["execution"]["target_environment"] == "simulation"
-            else (
-                "authorized-physical-observation"
-                if bundle.scenario.schema_version == "acceptance-scenario.v3"
-                else "requires-qualified-physical-release"
-            )
+            else "authorized-physical-observation"
         ),
     }
 
@@ -174,36 +159,22 @@ def run_verification(
 ) -> VerificationOutputs:
     """Attach to a running execution and produce canonical acceptance outputs."""
 
-    scenario_version = bundle.scenario.schema_version
-    if bundle.runtime is None or scenario_version not in {
-        "acceptance-scenario.v2",
-        "acceptance-scenario.v3",
-    }:
-        raise VerificationError("verify requires an acceptance-scenario.v2 or v3 bundle")
+    if bundle.runtime is None:
+        raise VerificationError("verify requires a complete execution bundle")
     scenario = bundle.scenario.data
     execution = scenario["execution"]
     physical = execution["target_environment"] in {"hil", "real_robot"}
-    if scenario_version == "acceptance-scenario.v2" and physical:
-        raise VerificationError("v0.5 verification is qualified only for simulation")
     if physical and otel_metrics_path is None:
         raise VerificationError("physical observation requires --otel-metrics evidence")
     if physical and metric_samples:
         raise VerificationError("physical observation requires file-backed OTLP evidence")
     result_id = str(scenario["scenario_id"])
     observe_clock = execution["time_mode"] != "hardware_realtime"
-    forbidden_monitor = (
-        ForbiddenGraphMonitor(scenario["forbidden_ros_graph"])
-        if scenario_version == "acceptance-scenario.v3"
-        else None
-    )
+    forbidden_monitor = ForbiddenGraphMonitor(scenario["forbidden_ros_graph"])
     observer = observer_factory(
         scenario["expected_ros_graph"],
         observe_clock=observe_clock,
-        forbidden_graph=(
-            scenario["forbidden_ros_graph"]
-            if scenario_version == "acceptance-scenario.v3"
-            else None
-        ),
+        forbidden_graph=scenario["forbidden_ros_graph"],
     )
     started_at = utc_now()
     measurement_started_ns = 0
@@ -218,7 +189,7 @@ def run_verification(
             poll_interval_sec=poll_interval_sec,
             now_ns=now_ns,
             sleep_fn=sleep_fn,
-            on_snapshot=forbidden_monitor.observe if forbidden_monitor is not None else None,
+            on_snapshot=forbidden_monitor.observe,
         )
         measurement_started_ns = now_ns()
         deadline_ns = measurement_started_ns + int(
@@ -227,8 +198,7 @@ def run_verification(
         last_snapshot = readiness.snapshot
         while now_ns() < deadline_ns:
             last_snapshot = observer.snapshot()
-            if forbidden_monitor is not None:
-                forbidden_monitor.observe(last_snapshot)
+            forbidden_monitor.observe(last_snapshot)
             remaining_sec = max(0.0, (deadline_ns - now_ns()) / 1_000_000_000)
             sleep_fn(min(poll_interval_sec, remaining_sec))
         measurement_finished_ns = now_ns()
@@ -286,9 +256,7 @@ def run_verification(
         )
         timing = evaluate_timing(execution, scenario["time_policy"], clock_samples)
     assertions = evaluate_metric_assertions(scenario["assertions"], metric_samples)
-    forbidden_observation: ForbiddenGraphObservation | None = (
-        forbidden_monitor.result() if forbidden_monitor is not None else None
-    )
+    forbidden_observation: ForbiddenGraphObservation = forbidden_monitor.result()
     finished_at = utc_now()
     result = build_acceptance_result(
         result_id=result_id,

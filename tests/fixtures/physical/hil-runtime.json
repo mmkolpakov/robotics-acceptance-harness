@@ -1,5 +1,5 @@
 {
-  "schema_version": "runtime-manifest.v3",
+  "schema_version": "runtime-manifest.v1",
   "runtime_id": "org.example.controller-hil-runtime",
   "generated_at": "2026-07-12T10:00:00Z",
   "oci_image": {
@@ -37,8 +37,8 @@
   },
   "authorization": {
     "mode": "verified_execution_permit",
-    "permit_sha256": "9a014cd9ac23ca5f7ff616669fd8370031af29e3e18592e34ac0ecf89d7e47ce",
-    "execution_verification_sha256": "61180f8e991d13445b1b2cd82dfb5b5cdb96cc557b04ce2cf776f3b8570a7cad",
+    "permit_sha256": "28d40374f91cad0c73886796671c0a90a99c3ac4edb10256b21c5bb14b74e270",
+    "execution_verification_sha256": "ab7bd8048ed4a9bdd8b71bb5087f5dc9dff67eb10d504991ac82e14955ceae73",
     "trust_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "data_plane": {

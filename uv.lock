@@ -409,7 +409,7 @@ wheels = [
 
 [[package]]
 name = "robotics-acceptance-harness"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "junitparser" },
@@ -437,7 +437,7 @@ requires-dist = [
     { name = "opentelemetry-proto", specifier = "==1.43.0" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
-    { name = "robotics-runtime-contracts", url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.5.0/robotics_runtime_contracts-0.5.0-py3-none-any.whl" },
+    { name = "robotics-runtime-contracts", url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.6.0/robotics_runtime_contracts-0.6.0-py3-none-any.whl" },
 ]
 
 [package.metadata.requires-dev]
@@ -454,17 +454,21 @@ dev = [
 
 [[package]]
 name = "robotics-runtime-contracts"
-version = "0.5.0"
-source = { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.5.0/robotics_runtime_contracts-0.5.0-py3-none-any.whl" }
+version = "0.6.0"
+source = { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.6.0/robotics_runtime_contracts-0.6.0-py3-none-any.whl" }
 dependencies = [
     { name = "jsonschema" },
+    { name = "referencing" },
 ]
 wheels = [
-    { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.5.0/robotics_runtime_contracts-0.5.0-py3-none-any.whl", hash = "sha256:c56ee51c8f29558573dc8bfe7cba429176521492663d168b44c30c8043a6aba0" },
+    { url = "https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.6.0/robotics_runtime_contracts-0.6.0-py3-none-any.whl", hash = "sha256:13b2500c7ad068d80284847119de087d6ddc3d5699ed33081116de95418e01b0" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "jsonschema", specifier = ">=4.26,<5" }]
+requires-dist = [
+    { name = "jsonschema", specifier = ">=4.26,<5" },
+    { name = "referencing", specifier = ">=0.37,<1" },
+]
 
 [[package]]
 name = "rpds-py"
