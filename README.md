@@ -31,7 +31,7 @@ this package alone does not qualify a target.
 
 ```bash
 python -m pip install \
-  https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.7.0/robotics_acceptance_harness-0.7.0-py3-none-any.whl
+  https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.7.1/robotics_acceptance_harness-0.7.1-py3-none-any.whl
 robotics-acceptance --version
 ```
 

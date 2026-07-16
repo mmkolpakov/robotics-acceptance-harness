@@ -7,7 +7,7 @@ allow-direct-references = true
 
 [project]
 name = "robotics-acceptance-harness"
-version = "0.7.0"
+version = "0.7.1"
 description = "Attach-only acceptance observer for validated robotics executions."
 requires-python = ">=3.12,<3.14"
 readme = "README.md"
