@@ -16,8 +16,8 @@ from robotics_acceptance_harness.metrics import MetricSample
 from robotics_acceptance_harness.readiness import GraphSnapshot, TopicObservation
 from robotics_acceptance_harness.timing import ClockSample
 
-FIXTURES = Path(__file__).parent / "fixtures" / "v2"
-V3_FIXTURES = Path(__file__).parent / "fixtures" / "v3"
+FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
+PHYSICAL_FIXTURES = Path(__file__).parent / "fixtures" / "physical"
 
 
 class FakeTime:
@@ -170,10 +170,10 @@ def _run_physical(
     offset_ms: float = 0.5,
 ) -> tuple[dict[str, object], Path, FakePhysicalObserver]:
     bundle = load_bundle(
-        V3_FIXTURES / "hil-scenario.yaml",
-        runtime_path=V3_FIXTURES / "hil-runtime.json",
-        permit_path=V3_FIXTURES / "hil-permit.json",
-        verification_path=V3_FIXTURES / "hil-verification.json",
+        PHYSICAL_FIXTURES / "hil-scenario.yaml",
+        runtime_path=PHYSICAL_FIXTURES / "hil-runtime.json",
+        permit_path=PHYSICAL_FIXTURES / "hil-permit.json",
+        verification_path=PHYSICAL_FIXTURES / "hil-verification.json",
         now=datetime(2026, 7, 12, 10, 0, tzinfo=UTC),
     )
     metrics_path = tmp_path / "hardware-timing.otlp.json"
@@ -199,7 +199,7 @@ def _run_physical(
 
 
 def test_verification_observes_without_starting_runtime(tmp_path: Path) -> None:
-    scenario = yaml.safe_load((FIXTURES / "simulation.yaml").read_text(encoding="utf-8"))
+    scenario = yaml.safe_load((FIXTURES / "scenario.yaml").read_text(encoding="utf-8"))
     scenario["timeouts"]["stable_for_sec"] = 0
     scenario["timeouts"]["execution_sec"] = 0.2
     scenario_path = tmp_path / "scenario.yaml"
@@ -243,10 +243,12 @@ def test_verification_observes_without_starting_runtime(tmp_path: Path) -> None:
     assert observer.closed
 
 
-def test_physical_verification_emits_v3_result_from_verified_evidence(tmp_path: Path) -> None:
+def test_physical_verification_emits_canonical_result_from_verified_evidence(
+    tmp_path: Path,
+) -> None:
     result, junit_path, observer = _run_physical(tmp_path)
 
-    assert result["schema_version"] == "acceptance-result.v3"
+    assert result["schema_version"] == "acceptance-result.v1"
     assert result["status"] == "passed"
     assert result["authorization"]["mode"] == "verified_execution_permit"
     assert result["forbidden_graph_observation"]["passed"] is True
@@ -260,10 +262,10 @@ def test_physical_verification_emits_v3_result_from_verified_evidence(tmp_path: 
 
 def test_physical_verification_requires_file_backed_timing_evidence(tmp_path: Path) -> None:
     bundle = load_bundle(
-        V3_FIXTURES / "hil-scenario.yaml",
-        runtime_path=V3_FIXTURES / "hil-runtime.json",
-        permit_path=V3_FIXTURES / "hil-permit.json",
-        verification_path=V3_FIXTURES / "hil-verification.json",
+        PHYSICAL_FIXTURES / "hil-scenario.yaml",
+        runtime_path=PHYSICAL_FIXTURES / "hil-runtime.json",
+        permit_path=PHYSICAL_FIXTURES / "hil-permit.json",
+        verification_path=PHYSICAL_FIXTURES / "hil-verification.json",
         now=datetime(2026, 7, 12, 10, 0, tzinfo=UTC),
     )
 

@@ -1,8 +1,8 @@
 {
-  "schema_version": "execution-permit.v2",
-  "predicate_type": "https://robotics-runtime-contracts.dev/attestations/execution-permit/v2",
+  "schema_version": "execution-permit.v1",
+  "predicate_type": "https://robotics-runtime-contracts.dev/attestations/execution-permit/v1",
   "permit_id": "org.example.hil-permit-001",
-  "scenario_sha256": "3af5fa4184f492b8560f548ce8e65749ce6025333d83f4f5abe99c03ff7236ac",
+  "scenario_sha256": "be20351ee35969362d16b0c69334c0afc246517c6519724741210b1c8cac8945",
   "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "trust_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "target": {

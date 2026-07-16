@@ -37,7 +37,8 @@ jobs:
         run: |
           mkdir -p artifacts
           uv run coverage run --branch -m pytest \
-            --robotics-scenario tests/fixtures/simulation.yaml \
+            --robotics-scenario tests/fixtures/simulation/scenario.yaml \
+            --robotics-runtime tests/fixtures/simulation/runtime.yaml \
             --junitxml=artifacts/junit.xml
           uv run coverage report --show-missing --fail-under=80
           uv run coverage xml -o artifacts/coverage.xml
@@ -49,8 +50,8 @@ jobs:
           uv pip install --python .wheel-venv/bin/python artifacts/dist/*.whl
           .wheel-venv/bin/robotics-acceptance --version
           .wheel-venv/bin/robotics-acceptance explain \
-            --scenario tests/fixtures/v3/simulation.yaml \
-            --runtime tests/fixtures/v3/runtime.yaml \
+            --scenario tests/fixtures/simulation/scenario.yaml \
+            --runtime tests/fixtures/simulation/runtime.yaml \
             > artifacts/installed-wheel-explain.json
           .wheel-venv/bin/pytest --help | grep -- --robotics-scenario
       - name: Upload validation artifacts
@@ -85,4 +86,5 @@ jobs:
       - name: Run tests
         run: >-
           uv run pytest
-          --robotics-scenario tests/fixtures/simulation.yaml
+          --robotics-scenario tests/fixtures/simulation/scenario.yaml
+          --robotics-runtime tests/fixtures/simulation/runtime.yaml

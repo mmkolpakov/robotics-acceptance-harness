@@ -12,6 +12,7 @@ from robotics_runtime_contracts import validate_document
 
 from robotics_acceptance_harness.documents import load_bundle
 from robotics_acceptance_harness.evidence import load_evidence_index
+from robotics_acceptance_harness.forbidden_graph import ForbiddenGraphObservation
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import (
     GraphSnapshot,
@@ -25,7 +26,7 @@ from robotics_acceptance_harness.result import (
 )
 from robotics_acceptance_harness.timing import TimingObservation
 
-FIXTURES = Path(__file__).parent / "fixtures" / "v2"
+FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
 
 
 def result_inputs() -> dict[str, object]:
@@ -43,7 +44,7 @@ def result_inputs() -> dict[str, object]:
     return {
         "result_id": "org.example.physics-smoke-001",
         "bundle": load_bundle(
-            FIXTURES / "simulation.yaml",
+            FIXTURES / "scenario.yaml",
             runtime_path=FIXTURES / "runtime.yaml",
         ),
         "readiness": ReadinessResult(snapshot, 1_000_000_000, 1.0),
@@ -56,6 +57,7 @@ def result_inputs() -> dict[str, object]:
             "recorders_closed": True,
             "evidence_index_finalized": True,
         },
+        "forbidden_graph": ForbiddenGraphObservation((), (), (), ()),
     }
 
 

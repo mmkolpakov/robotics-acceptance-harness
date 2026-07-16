@@ -25,15 +25,6 @@ def _iso8601(value: datetime) -> str:
 
 
 def _workload_result(runtime: Mapping[str, Any]) -> dict[str, Any]:
-    if runtime["schema_version"] == "runtime-manifest.v1":
-        inference = runtime["inference"]
-        return {
-            "kind": "inference",
-            "runtime_family": inference["runtime_family"],
-            "actual_provider": inference["actual_provider"],
-            "model_format": runtime["model"]["format"],
-            "fallback_count": inference["fallback_count"],
-        }
     workload = runtime["workload"]
     if workload["kind"] == "none":
         return {"kind": "none"}
@@ -111,7 +102,7 @@ def _authorization_result(bundle: DocumentBundle) -> dict[str, Any]:
     if execution["target_environment"] == "simulation":
         return {"mode": "none"}
     if bundle.permit is None or bundle.verification is None:
-        raise ValueError("physical acceptance-result.v3 requires verified authorization")
+        raise ValueError("physical acceptance-result.v1 requires verified authorization")
     return {
         "mode": "verified_execution_permit",
         "permit_sha256": bundle.permit.sha256,
@@ -153,49 +144,40 @@ def build_acceptance_result(
     evidence: Sequence[Mapping[str, Any]] = (),
     evidence_index: VerifiedEvidence | None = None,
     status: str | None = None,
-    forbidden_graph: ForbiddenGraphObservation | None = None,
+    forbidden_graph: ForbiddenGraphObservation,
     hardware_timing: HardwareTimingObservation | None = None,
     hardware_timing_evidence_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Build and validate the result version corresponding to the scenario."""
+    """Build and validate the canonical acceptance result."""
 
     if bundle.runtime is None:
-        raise ValueError("acceptance-result.v2 requires a runtime manifest")
+        raise ValueError("acceptance-result.v1 requires a runtime manifest")
     if evidence_index is not None:
         if evidence:
             raise ValueError("provide evidence or evidence_index, not both")
         if evidence_index.index.data["run_id"] != result_id:
             raise ValueError("evidence index run_id must equal result_id")
         evidence = evidence_index.links
-    scenario_v3 = bundle.scenario.schema_version == "acceptance-scenario.v3"
-    if not scenario_v3 and any(
-        value is not None
-        for value in (forbidden_graph, hardware_timing, hardware_timing_evidence_sha256)
-    ):
-        raise ValueError("acceptance-result.v2 does not accept v3 observations")
-    if scenario_v3 and forbidden_graph is None:
-        raise ValueError("acceptance-result.v3 requires forbidden graph observation")
     physical = bundle.scenario.data["execution"]["target_environment"] in {
         "hil",
         "real_robot",
     }
     if physical and (hardware_timing is None or hardware_timing_evidence_sha256 is None):
-        raise ValueError("physical acceptance-result.v3 requires hardware timing evidence")
+        raise ValueError("physical acceptance-result.v1 requires hardware timing evidence")
     if not physical and (
         hardware_timing is not None or hardware_timing_evidence_sha256 is not None
     ):
-        raise ValueError("simulation acceptance-result.v3 does not accept hardware timing")
+        raise ValueError("simulation acceptance-result.v1 does not accept hardware timing")
 
     result_status = status or _status(assertions)
-    if result_status == "passed" and scenario_v3:
-        assert forbidden_graph is not None
-        if not forbidden_graph.passed or (
-            hardware_timing is not None and not hardware_timing.within_policy
-        ):
-            result_status = "failed"
+    if result_status == "passed" and (
+        not forbidden_graph.passed
+        or (hardware_timing is not None and not hardware_timing.within_policy)
+    ):
+        result_status = "failed"
 
     result: dict[str, Any] = {
-        "schema_version": "acceptance-result.v3" if scenario_v3 else "acceptance-result.v2",
+        "schema_version": "acceptance-result.v1",
         "result_id": result_id,
         "scenario_sha256": bundle.scenario.sha256,
         "runtime_manifest_sha256": bundle.runtime.sha256,
@@ -214,6 +196,7 @@ def build_acceptance_result(
             for evaluation in assertions
         ],
         "observed_ros_graph": _observed_graph(readiness),
+        "forbidden_graph_observation": _forbidden_graph_result(forbidden_graph),
         "execution": {
             field: bundle.scenario.data["execution"][field]
             for field in (
@@ -225,6 +208,7 @@ def build_acceptance_result(
             )
         },
         "workload": _workload_result(bundle.runtime.data),
+        "authorization": _authorization_result(bundle),
         "lifecycle_states": _lifecycle_states(readiness.snapshot),
         "clock_observation": {
             "monotonic": timing.monotonic,
@@ -236,22 +220,16 @@ def build_acceptance_result(
         "shutdown": dict(shutdown),
         "evidence": [dict(item) for item in evidence],
     }
-    if scenario_v3:
-        assert forbidden_graph is not None
-        result["forbidden_graph_observation"] = _forbidden_graph_result(forbidden_graph)
-        result["authorization"] = _authorization_result(bundle)
-        if hardware_timing is not None:
-            assert hardware_timing_evidence_sha256 is not None
-            result["hardware_clock_observation"] = _hardware_clock_result(
-                hardware_timing,
-                hardware_timing_evidence_sha256,
-            )
+    if hardware_timing is not None:
+        assert hardware_timing_evidence_sha256 is not None
+        result["hardware_clock_observation"] = _hardware_clock_result(
+            hardware_timing,
+            hardware_timing_evidence_sha256,
+        )
     if bundle.model is not None:
         result["model_manifest_sha256"] = bundle.model.sha256
     if bundle.dataset is not None:
         result["dataset_manifest_sha256"] = bundle.dataset.sha256
-    if bundle.permit is not None and not scenario_v3:
-        result["permit_sha256"] = bundle.permit.sha256
     validate_document(result)
     return result
 
@@ -294,24 +272,23 @@ def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
     suite.add_property("scenario_sha256", result["scenario_sha256"])
     suite.add_property("runtime_manifest_sha256", result["runtime_manifest_sha256"])
     assertion_results = list(result["assertion_results"])
-    if result["schema_version"] == "acceptance-result.v3":
-        forbidden = result["forbidden_graph_observation"]
+    forbidden = result["forbidden_graph_observation"]
+    assertion_results.append(
+        {
+            "assertion_id": "forbidden-ros-graph",
+            "status": "passed" if forbidden["passed"] else "failed",
+            "message": "" if forbidden["passed"] else "forbidden ROS interface observed",
+        }
+    )
+    hardware = result.get("hardware_clock_observation")
+    if hardware is not None:
         assertion_results.append(
             {
-                "assertion_id": "forbidden-ros-graph",
-                "status": "passed" if forbidden["passed"] else "failed",
-                "message": "" if forbidden["passed"] else "forbidden ROS interface observed",
+                "assertion_id": "hardware-clock-policy",
+                "status": "passed" if hardware["within_policy"] else "failed",
+                "message": "" if hardware["within_policy"] else "hardware timing out of policy",
             }
         )
-        hardware = result.get("hardware_clock_observation")
-        if hardware is not None:
-            assertion_results.append(
-                {
-                    "assertion_id": "hardware-clock-policy",
-                    "status": "passed" if hardware["within_policy"] else "failed",
-                    "message": "" if hardware["within_policy"] else "hardware timing out of policy",
-                }
-            )
     if not assertion_results:
         assertion_results.append(
             {

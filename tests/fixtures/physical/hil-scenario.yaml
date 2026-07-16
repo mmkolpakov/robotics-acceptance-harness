@@ -1,4 +1,4 @@
-schema_version: acceptance-scenario.v3
+schema_version: acceptance-scenario.v1
 scenario_id: org.example.controller-hil-observation
 execution:
   target_environment: hil
@@ -14,7 +14,7 @@ execution:
   security_profile: sros2_enforce
 authorization:
   mode: signed_execution_permit
-  permit_schema: execution-permit.v2
+  permit_schema: execution-permit.v1
   verification_schema: execution-verification.v1
   trust_policy_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   two_party_approval: true

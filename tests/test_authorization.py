@@ -11,7 +11,7 @@ import pytest
 
 from robotics_acceptance_harness.documents import BundleValidationError, load_bundle
 
-FIXTURES = Path(__file__).parent / "fixtures" / "v3"
+FIXTURES = Path(__file__).parent / "fixtures" / "physical"
 NOW = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
 
 
@@ -48,14 +48,14 @@ def _mutated_verification_bundle(
     return _valid_bundle(runtime_path=runtime_path, verification_path=verification_path)
 
 
-def test_load_bundle_aligns_v3_physical_authorization() -> None:
+def test_load_bundle_aligns_physical_authorization() -> None:
     bundle = _valid_bundle()
 
-    assert bundle.scenario.schema_version == "acceptance-scenario.v3"
+    assert bundle.scenario.schema_version == "acceptance-scenario.v1"
     assert bundle.runtime is not None
-    assert bundle.runtime.schema_version == "runtime-manifest.v3"
+    assert bundle.runtime.schema_version == "runtime-manifest.v1"
     assert bundle.permit is not None
-    assert bundle.permit.schema_version == "execution-permit.v2"
+    assert bundle.permit.schema_version == "execution-permit.v1"
     assert bundle.verification is not None
     assert bundle.verification.schema_version == "execution-verification.v1"
 
