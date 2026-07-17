@@ -4,13 +4,55 @@
 [![Release](https://img.shields.io/github/v/release/mmkolpakov/robotics-acceptance-harness)](https://github.com/mmkolpakov/robotics-acceptance-harness/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Attach-only acceptance observation for an already running ROS 2 execution.
+Turn an already running ROS 2 execution into a reproducible acceptance verdict.
 
-The harness validates a scenario and runtime manifest, waits for the declared
-ROS graph and lifecycle states, evaluates OpenTelemetry metrics, verifies the
-final evidence index, and emits a contract-valid result plus JUnit XML. It does
-not start containers, launch nodes, change lifecycle states, control a
-simulator, verify signatures, or send commands to physical equipment.
+Use this repository to:
+
+1. **Explain** and cross-check a scenario, runtime, model, dataset, and physical
+   authorization bundle before observation starts.
+2. **Observe** the declared ROS graph, lifecycle states, OpenTelemetry metrics,
+   and finalized evidence without controlling the system.
+3. **Report** a contract-valid acceptance result and JUnit XML for CI.
+
+The harness is attach-only. It does not start containers, launch nodes, change
+lifecycle states, control a simulator, verify signatures, or send commands to
+physical equipment.
+
+## Where It Fits
+
+```mermaid
+flowchart LR
+    product["Product repository<br/>worlds, robots, models, drivers, behavior"]
+    infra["Runtime infra<br/>start services, expose facts, capture evidence"]
+    execution["Running ROS 2 execution"]
+    harness["Acceptance harness<br/>observe, evaluate, report"]
+    result["Acceptance result<br/>JSON and JUnit"]
+    contracts["Runtime contracts<br/>scenario, runtime, evidence, result"]
+
+    product --> infra --> execution --> harness --> result
+    contracts -. validates .-> product
+    contracts -. validates .-> infra
+    contracts -. validates .-> harness
+```
+
+The end-to-end handoff is machine-readable: a product repository supplies its
+workload and scenario, runtime infra emits observed runtime and evidence facts,
+and the harness emits an acceptance result plus JUnit. Each layer can evolve
+and be tested independently.
+
+The document model is published by
+[`robotics-runtime-contracts`](https://github.com/mmkolpakov/robotics-runtime-contracts).
+The reference ROS 2, Gazebo, playback, evidence, and observer images are
+published by
+[`robotics-runtime-infra`](https://github.com/mmkolpakov/robotics-runtime-infra).
+
+## Choose a Command
+
+| Goal | Interface | Starts or controls the system |
+| --- | --- | --- |
+| Validate and explain an execution bundle | `robotics-acceptance explain` | No |
+| Observe a running execution and decide a verdict | `robotics-acceptance verify` | No |
+| Reuse a validated simulation bundle in project tests | `robotics_bundle` pytest fixture | No |
 
 ## Baseline
 
@@ -41,7 +83,11 @@ Jazzy packages are required. A plain Python environment is sufficient for
 
 ## Quick Start
 
+Clone the repository to use its known-good simulation fixture:
+
 ```bash
+git clone https://github.com/mmkolpakov/robotics-acceptance-harness.git
+cd robotics-acceptance-harness
 uv sync --locked
 uv run robotics-acceptance explain \
   --scenario tests/fixtures/simulation/scenario.yaml \
@@ -50,6 +96,8 @@ uv run robotics-acceptance explain \
 
 The command validates and cross-checks both documents, then prints the resolved
 execution mode, workload, ROS graph size, evidence policy, and content digests.
+The known-good fixture reports `"policy": "accepted-simulation"` and exits
+with code `0`.
 
 ## Verify an Execution
 
