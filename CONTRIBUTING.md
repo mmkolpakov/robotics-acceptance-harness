@@ -9,9 +9,16 @@ orchestration in consuming repositories.
 ```bash
 uv sync --locked --all-groups
 uv run pre-commit run --all-files
-uv run pytest --robotics-scenario tests/fixtures/simulation.yaml
-uv build
+uv run pytest \
+  -p robotics_acceptance_harness.plugin \
+  --robotics-scenario tests/fixtures/simulation/scenario.yaml \
+  --robotics-runtime tests/fixtures/simulation/runtime.yaml
+uv build --no-sources
 ```
+
+Place `robotics-runtime-contracts` next to this repository. The standard
+dependency remains a Semantic Versioning range; `tool.uv.sources` uses the
+sibling checkout only for development and CI.
 
 Every behavioral change needs a focused test. Changes to Semgrep policy need a
 matching `ruleid` or `ok` example in `.semgrep/attach-only.py`. Pull requests

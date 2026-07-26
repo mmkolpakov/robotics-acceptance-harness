@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 from junitparser import JUnitXml
+from robotics_runtime_contracts import migrate_scenario_v1_to_v2
 
 from robotics_acceptance_harness.application import VerificationError, run_verification
 from robotics_acceptance_harness.documents import load_bundle
@@ -18,6 +19,8 @@ from robotics_acceptance_harness.timing import ClockSample
 
 FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
 PHYSICAL_FIXTURES = Path(__file__).parent / "fixtures" / "physical"
+SIMULATION_RUN_ID = "run-6ba7b810-9dad-41d1-80b4-00c04fd430c8"
+PHYSICAL_RUN_ID = "run-6ba7b811-9dad-41d1-80b4-00c04fd430c8"
 
 
 class FakeTime:
@@ -32,8 +35,9 @@ class FakeTime:
 
 
 class FakeObserver:
-    def __init__(self, clock: FakeTime) -> None:
+    def __init__(self, clock: FakeTime, *, source_scale: float = 1.0) -> None:
         self.clock = clock
+        self.source_scale = source_scale
         self._clock_samples: list[ClockSample] = []
         self.closed = False
 
@@ -43,7 +47,12 @@ class FakeObserver:
 
     def snapshot(self) -> GraphSnapshot:
         if not self._clock_samples or self._clock_samples[-1].observed_at_ns != self.clock.value_ns:
-            self._clock_samples.append(ClockSample(self.clock.value_ns, self.clock.value_ns))
+            self._clock_samples.append(
+                ClockSample(
+                    self.clock.value_ns,
+                    int(self.clock.value_ns * self.source_scale),
+                )
+            )
         return GraphSnapshot(
             observed_at_ns=self.clock.value_ns,
             topics={
@@ -132,7 +141,7 @@ def _write_hardware_metrics(path: Path, *, offset_ms: float) -> None:
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
 
-def _write_evidence_index(path: Path, metrics_path: Path) -> None:
+def _write_evidence_index(path: Path, metrics_path: Path, *, run_id: str) -> None:
     local_path = metrics_path.as_posix()
     if os_name == "nt":
         local_path = f"/{local_path}"
@@ -140,7 +149,7 @@ def _write_evidence_index(path: Path, metrics_path: Path) -> None:
         yaml.safe_dump(
             {
                 "schema_version": "evidence-index.v1",
-                "run_id": "org.example.controller-hil-observation",
+                "run_id": run_id,
                 "generated_at": "2026-07-12T10:01:00Z",
                 "finalized": True,
                 "segments": [
@@ -155,6 +164,159 @@ def _write_evidence_index(path: Path, metrics_path: Path) -> None:
                         "upload_status": "local",
                         "checksum_verified": True,
                     }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _v2_bundle(tmp_path: Path):
+    scenario = yaml.safe_load((FIXTURES / "scenario.yaml").read_text(encoding="utf-8"))
+    scenario["timeouts"]["stable_for_sec"] = 0
+    scenario["timeouts"]["execution_sec"] = 0.2
+    migrated = migrate_scenario_v1_to_v2(
+        scenario,
+        metric_attributes={},
+        time_authority_min_samples=30,
+        max_clock_offset_p50_ms=1,
+        max_clock_offset_p95_ms=2,
+        max_clock_offset_ms=5,
+    )
+    scenario_path = tmp_path / "scenario-v2.yaml"
+    scenario_path.write_text(
+        yaml.safe_dump(migrated, sort_keys=False),
+        encoding="utf-8",
+    )
+    return load_bundle(scenario_path, runtime_path=FIXTURES / "runtime.yaml")
+
+
+def _write_v2_metrics(
+    path: Path,
+    *,
+    timestamps: list[int],
+    run_id: str = SIMULATION_RUN_ID,
+    domain_id: str = "camera-domain",
+) -> None:
+    common_attributes = [
+        {
+            "key": "run.id",
+            "value": {"stringValue": run_id},
+        },
+        {
+            "key": "domain.id",
+            "value": {"stringValue": domain_id},
+        },
+        {
+            "key": "time.source.id",
+            "value": {"stringValue": "simulation-clock"},
+        },
+    ]
+    metrics = [
+        {
+            "name": "robotics.time_authority.offset",
+            "unit": "ms",
+            "gauge": {
+                "dataPoints": [
+                    {"timeUnixNano": str(timestamp), "asDouble": 0.1} for timestamp in timestamps
+                ]
+            },
+        },
+        {
+            "name": "robotics.message.age",
+            "unit": "ms",
+            "gauge": {
+                "dataPoints": [
+                    {"timeUnixNano": "1500000000", "asDouble": 1.0},
+                ]
+            },
+        },
+        {
+            "name": "robotics.message.loss_ratio",
+            "unit": "1",
+            "gauge": {
+                "dataPoints": [
+                    {"timeUnixNano": "1500000000", "asDouble": 0.0},
+                ]
+            },
+        },
+        {
+            "name": "robotics.simulation.deadline_miss_ratio",
+            "unit": "1",
+            "gauge": {
+                "dataPoints": [
+                    {"timeUnixNano": "1500000000", "asDouble": 0.0},
+                ]
+            },
+        },
+    ]
+    payload = {
+        "resourceMetrics": [
+            {
+                "resource": {"attributes": common_attributes},
+                "scopeMetrics": [{"metrics": metrics}],
+            }
+        ]
+    }
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+def _write_v2_evidence_index(path: Path, metrics_path: Path) -> None:
+    local_path = metrics_path.resolve().as_posix()
+    if os_name == "nt":
+        local_path = f"/{local_path}"
+    payload = metrics_path.read_bytes()
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "evidence-index.v2",
+                "run_id": SIMULATION_RUN_ID,
+                "generated_at": "2026-07-26T12:00:02Z",
+                "finalized": True,
+                "policy_observation": {
+                    "recording_mode": "on_failure",
+                    "compression": "zstd",
+                    "upload_mode": "local_only",
+                    "remote_sink_used": False,
+                    "spool_peak_size_bytes": len(payload),
+                    "upload_lag_max_sec": 0,
+                },
+                "segments": [
+                    {
+                        "uri": metrics_path.resolve().as_uri(),
+                        "local_path": local_path,
+                        "media_type": "application/json",
+                        "sha256": sha256(payload).hexdigest(),
+                        "size_bytes": len(payload),
+                        "retention_class": "pull-request-7d",
+                        "segment_index": 0,
+                        "upload_status": "local",
+                        "checksum_verified": True,
+                    }
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_run_context(path: Path, bundle) -> None:
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "acceptance-run.v1",
+                "run_id": SIMULATION_RUN_ID,
+                "created_at": "2026-07-26T12:00:00Z",
+                "scenario_id": bundle.scenario.data["scenario_id"],
+                "scenario_sha256": bundle.scenario.sha256,
+                "time_authority": {
+                    "kind": "sim_clock",
+                    "source_id": "simulation-clock",
+                },
+                "domains": [
+                    {"domain_id": "camera-domain", "role": "sensor"},
                 ],
             },
             sort_keys=False,
@@ -179,18 +341,27 @@ def _run_physical(
     metrics_path = tmp_path / "hardware-timing.otlp.json"
     _write_hardware_metrics(metrics_path, offset_ms=offset_ms)
     evidence_path = tmp_path / "evidence-index.yaml"
-    _write_evidence_index(evidence_path, metrics_path)
+    _write_evidence_index(evidence_path, metrics_path, run_id=PHYSICAL_RUN_ID)
     clock = FakeTime()
     observer = FakePhysicalObserver(clock, forbidden_publishers=forbidden_publishers)
     started = datetime(2026, 7, 12, 10, 0, tzinfo=UTC)
     timestamps = iter((started, started + timedelta(seconds=123)))
+    measurement_start_ns = int(started.timestamp() * 1_000_000_000)
+    measurement_timestamps = iter(
+        (
+            measurement_start_ns,
+            measurement_start_ns + 123 * 1_000_000_000,
+        )
+    )
     outputs = run_verification(
+        run_id=PHYSICAL_RUN_ID,
         bundle=bundle,
         evidence_index_path=evidence_path,
         otel_metrics_path=metrics_path,
         output_dir=tmp_path / "output",
         observer_factory=lambda *_args, **_kwargs: observer,
         now_ns=clock.now_ns,
+        wall_time_ns=lambda: next(measurement_timestamps),
         sleep_fn=clock.sleep,
         utc_now=lambda: next(timestamps),
         poll_interval_sec=0.05,
@@ -211,7 +382,7 @@ def test_verification_observes_without_starting_runtime(tmp_path: Path) -> None:
         yaml.safe_dump(
             {
                 "schema_version": "evidence-index.v1",
-                "run_id": "org.example.physics-smoke",
+                "run_id": SIMULATION_RUN_ID,
                 "generated_at": "2026-07-11T12:01:00Z",
                 "finalized": True,
                 "segments": [],
@@ -224,14 +395,17 @@ def test_verification_observes_without_starting_runtime(tmp_path: Path) -> None:
     observer = FakeObserver(clock)
     started = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
     timestamps = iter((started, started + timedelta(seconds=1)))
+    measurement_timestamps = iter((0, 2))
 
     outputs = run_verification(
+        run_id=SIMULATION_RUN_ID,
         bundle=bundle,
         evidence_index_path=evidence_path,
         metric_samples=(MetricSample("robotics.simulation.deadline_miss_ratio", 0.0, "1", 1),),
         output_dir=tmp_path / "output",
         observer_factory=lambda *_args, **_kwargs: observer,
         now_ns=clock.now_ns,
+        wall_time_ns=lambda: next(measurement_timestamps),
         sleep_fn=clock.sleep,
         utc_now=lambda: next(timestamps),
         poll_interval_sec=0.05,
@@ -241,6 +415,142 @@ def test_verification_observes_without_starting_runtime(tmp_path: Path) -> None:
     assert outputs.result_path.is_file()
     assert outputs.junit_path.is_file()
     assert observer.closed
+
+
+def test_v2_verification_requires_domain_and_run_context(tmp_path: Path) -> None:
+    with pytest.raises(
+        VerificationError,
+        match="v2 verification requires domain_id and run_context_path",
+    ):
+        run_verification(
+            run_id=SIMULATION_RUN_ID,
+            bundle=_v2_bundle(tmp_path),
+            evidence_index_path=tmp_path / "evidence-index.yaml",
+            otel_metrics_path=tmp_path / "metrics.otlp.json",
+            output_dir=tmp_path / "output",
+        )
+
+
+def test_time_authority_rejects_samples_outside_measurement_window(tmp_path: Path) -> None:
+    bundle = _v2_bundle(tmp_path)
+    metrics_path = tmp_path / "metrics.otlp.json"
+    _write_v2_metrics(metrics_path, timestamps=list(range(100, 130)))
+    evidence_path = tmp_path / "evidence-index-v2.yaml"
+    _write_v2_evidence_index(evidence_path, metrics_path)
+    run_context_path = tmp_path / "acceptance-run.yaml"
+    _write_run_context(run_context_path, bundle)
+    clock = FakeTime()
+    observer = FakeObserver(clock)
+    started = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+    lifecycle_timestamps = iter((started, started + timedelta(seconds=1)))
+    measurement_timestamps = iter((1_000_000_000, 2_000_000_000))
+
+    outputs = run_verification(
+        run_id=SIMULATION_RUN_ID,
+        domain_id="camera-domain",
+        run_context_path=run_context_path,
+        bundle=bundle,
+        evidence_index_path=evidence_path,
+        otel_metrics_path=metrics_path,
+        output_dir=tmp_path / "output",
+        observer_factory=lambda *_args, **_kwargs: observer,
+        now_ns=clock.now_ns,
+        wall_time_ns=lambda: next(measurement_timestamps),
+        sleep_fn=clock.sleep,
+        utc_now=lambda: next(lifecycle_timestamps),
+        poll_interval_sec=0.05,
+    )
+
+    observation = outputs.result["time_authority_observation"]
+    assert observation["window_start_ns"] == 1_000_000_000
+    assert observation["window_end_ns"] == 2_000_000_000
+    assert observation["sample_count"] == 0
+    assert observation["within_policy"] is False
+    assert outputs.result["status"] != "passed"
+
+
+def test_v2_verification_ignores_metrics_from_another_run(tmp_path: Path) -> None:
+    bundle = _v2_bundle(tmp_path)
+    metrics_path = tmp_path / "metrics.otlp.json"
+    _write_v2_metrics(
+        metrics_path,
+        timestamps=list(range(1_000_000_000, 1_000_000_030)),
+        run_id="run-00000000-0000-4000-8000-000000000001",
+    )
+    evidence_path = tmp_path / "evidence-index-v2.yaml"
+    _write_v2_evidence_index(evidence_path, metrics_path)
+    run_context_path = tmp_path / "acceptance-run.yaml"
+    _write_run_context(run_context_path, bundle)
+    clock = FakeTime()
+    observer = FakeObserver(clock)
+    started = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+    lifecycle_timestamps = iter((started, started + timedelta(seconds=1)))
+    measurement_timestamps = iter((1_000_000_000, 2_000_000_000))
+
+    outputs = run_verification(
+        run_id=SIMULATION_RUN_ID,
+        domain_id="camera-domain",
+        run_context_path=run_context_path,
+        bundle=bundle,
+        evidence_index_path=evidence_path,
+        otel_metrics_path=metrics_path,
+        output_dir=tmp_path / "output",
+        observer_factory=lambda *_args, **_kwargs: observer,
+        now_ns=clock.now_ns,
+        wall_time_ns=lambda: next(measurement_timestamps),
+        sleep_fn=clock.sleep,
+        utc_now=lambda: next(lifecycle_timestamps),
+        poll_interval_sec=0.05,
+    )
+
+    assert outputs.result["time_authority_observation"]["sample_count"] == 0
+    assert outputs.result["status"] == "error"
+
+
+def test_timing_policy_failure_emits_result_and_junit(tmp_path: Path) -> None:
+    scenario = yaml.safe_load((FIXTURES / "scenario.yaml").read_text(encoding="utf-8"))
+    scenario["timeouts"]["stable_for_sec"] = 0
+    scenario["timeouts"]["execution_sec"] = 0.2
+    scenario_path = tmp_path / "scenario.yaml"
+    scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+    bundle = load_bundle(scenario_path, runtime_path=FIXTURES / "runtime.yaml")
+    evidence_path = tmp_path / "evidence-index.yaml"
+    evidence_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "evidence-index.v1",
+                "run_id": SIMULATION_RUN_ID,
+                "generated_at": "2026-07-11T12:01:00Z",
+                "finalized": True,
+                "segments": [],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    clock = FakeTime()
+    observer = FakeObserver(clock, source_scale=0.5)
+    started = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
+    timestamps = iter((started, started + timedelta(seconds=1)))
+    measurement_timestamps = iter((0, 2))
+
+    outputs = run_verification(
+        run_id=SIMULATION_RUN_ID,
+        bundle=bundle,
+        evidence_index_path=evidence_path,
+        metric_samples=(MetricSample("robotics.simulation.deadline_miss_ratio", 0.0, "1", 1),),
+        output_dir=tmp_path / "output",
+        observer_factory=lambda *_args, **_kwargs: observer,
+        now_ns=clock.now_ns,
+        wall_time_ns=lambda: next(measurement_timestamps),
+        sleep_fn=clock.sleep,
+        utc_now=lambda: next(timestamps),
+        poll_interval_sec=0.05,
+    )
+
+    assert outputs.result["status"] == "failed"
+    assert outputs.result_path.is_file()
+    assert JUnitXml.fromfile(outputs.junit_path).failures == 1
 
 
 def test_physical_verification_emits_canonical_result_from_verified_evidence(
@@ -271,6 +581,7 @@ def test_physical_verification_requires_file_backed_timing_evidence(tmp_path: Pa
 
     with pytest.raises(VerificationError, match="requires --otel-metrics evidence"):
         run_verification(
+            run_id=PHYSICAL_RUN_ID,
             bundle=bundle,
             evidence_index_path=tmp_path / "evidence-index.yaml",
             output_dir=tmp_path / "output",

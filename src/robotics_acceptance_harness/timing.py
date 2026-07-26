@@ -10,8 +10,13 @@ from robotics_acceptance_harness.readiness import ReadinessIssue
 class TimingValidationError(ValueError):
     """Raised when observed clock behavior violates the selected time policy."""
 
-    def __init__(self, issues: tuple[ReadinessIssue, ...]) -> None:
+    def __init__(
+        self,
+        issues: tuple[ReadinessIssue, ...],
+        observation: TimingObservation,
+    ) -> None:
         self.issues = issues
+        self.observation = observation
         super().__init__("; ".join(f"{issue.json_path}: {issue.message}" for issue in issues))
 
 
@@ -21,9 +26,6 @@ class ClockSample:
     source_time_ns: int
     real_time_factor: float | None = None
     deadline_miss_ratio: float | None = None
-    offset_ms: float | None = None
-    drift_ppm: float | None = None
-    message_age_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +60,11 @@ def evaluate_timing(
     """Evaluate clock monotonicity and mode-specific timing limits."""
 
     if not samples:
-        raise TimingValidationError((ReadinessIssue("$.time_policy", "no clock samples"),))
+        observation = TimingObservation(False, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        raise TimingValidationError(
+            (ReadinessIssue("$.time_policy", "no clock samples"),),
+            observation,
+        )
 
     issues: list[ReadinessIssue] = []
     monotonic = all(
@@ -119,56 +125,42 @@ def evaluate_timing(
             )
         if samples[-1].source_time_ns <= samples[0].source_time_ns:
             issues.append(ReadinessIssue("$.time_policy", "playback clock did not advance"))
-    elif mode == "hardware_realtime":
-        offset_values = _required_values(
-            samples,
-            "offset_ms",
-            "$.time_policy.max_clock_offset_ms",
-            issues,
-        )
-        drift_values = _required_values(
-            samples,
-            "drift_ppm",
-            "$.time_policy.max_clock_drift_ppm",
-            issues,
-        )
-        age_values = _required_values(
-            samples,
-            "message_age_ms",
-            "$.time_policy.max_message_age_ms",
-            issues,
-        )
-        if offset_values:
-            offset_ms = max(abs(value) for value in offset_values)
-            if offset_ms > time_policy["max_clock_offset_ms"]:
+    elif mode == "simulation_stepped":
+        step_ns = round(float(time_policy["step_size_sec"]) * 1_000_000_000)
+        max_skipped_steps = int(time_policy.get("max_skipped_steps", 10_000))
+        deltas = [
+            current.source_time_ns - previous.source_time_ns
+            for previous, current in zip(samples, samples[1:], strict=False)
+        ]
+        if not deltas or samples[-1].source_time_ns <= samples[0].source_time_ns:
+            issues.append(ReadinessIssue("$.time_policy", "stepped clock did not advance"))
+        for index, delta in enumerate(deltas):
+            if delta <= 0:
                 issues.append(
                     ReadinessIssue(
-                        "$.time_policy.max_clock_offset_ms",
-                        f"maximum absolute offset was {offset_ms}",
+                        "$.time_policy.step_size_sec",
+                        f"sample {index + 1} did not advance by a positive step",
                     )
                 )
-        if drift_values:
-            drift_ppm = max(abs(value) for value in drift_values)
-            if drift_ppm > time_policy["max_clock_drift_ppm"]:
+                continue
+            observed_steps = max(1, round(delta / step_ns))
+            residual_ns = abs(delta - observed_steps * step_ns)
+            if residual_ns > 1:
                 issues.append(
                     ReadinessIssue(
-                        "$.time_policy.max_clock_drift_ppm",
-                        f"maximum absolute drift was {drift_ppm}",
+                        "$.time_policy.step_size_sec",
+                        f"sample {index + 1} delta {delta} ns is not a step multiple",
                     )
                 )
-        if age_values:
-            max_message_age_ms = max(age_values)
-            if max_message_age_ms > time_policy["max_message_age_ms"]:
+            skipped_steps = observed_steps - 1
+            if skipped_steps > max_skipped_steps:
                 issues.append(
                     ReadinessIssue(
-                        "$.time_policy.max_message_age_ms",
-                        f"maximum message age was {max_message_age_ms}",
+                        "$.time_policy.max_skipped_steps",
+                        f"sample {index + 1} skipped {skipped_steps} steps",
                     )
                 )
-
-    if issues:
-        raise TimingValidationError(tuple(issues))
-    return TimingObservation(
+    observation = TimingObservation(
         monotonic=monotonic,
         offset_ms=offset_ms,
         drift_ppm=drift_ppm,
@@ -177,6 +169,9 @@ def evaluate_timing(
         max_message_age_ms=max_message_age_ms,
         clock_hz=clock_hz,
     )
+    if issues:
+        raise TimingValidationError(tuple(issues), observation)
+    return observation
 
 
 __all__ = [

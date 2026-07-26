@@ -83,3 +83,11 @@ def test_invalid_otlp_json_reports_line(tmp_path: Path) -> None:
 
     with pytest.raises(MetricInputError, match=":2"):
         load_otlp_json_metrics(path)
+
+
+def test_otlp_metrics_are_parsed_only_when_digest_matches(tmp_path: Path) -> None:
+    path = tmp_path / "metrics.json"
+    path.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(MetricInputError, match="digest differs"):
+        load_otlp_json_metrics(path, expected_sha256="0" * 64)

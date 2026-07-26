@@ -4,8 +4,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from time import monotonic_ns, sleep
+from re import fullmatch
+from time import monotonic_ns, sleep, time_ns
 from typing import Any, Protocol
+from uuid import uuid4
 
 from robotics_acceptance_harness.documents import DocumentBundle
 from robotics_acceptance_harness.evidence import VerifiedEvidence, load_evidence_index
@@ -17,8 +19,16 @@ from robotics_acceptance_harness.hardware_timing import (
     HardwareTimingObservation,
     evaluate_hardware_timing,
 )
-from robotics_acceptance_harness.metrics import MetricSample, evaluate_metric_assertions
+from robotics_acceptance_harness.metrics import (
+    AssertionEvaluation,
+    MetricSample,
+    evaluate_metric_assertions,
+)
 from robotics_acceptance_harness.otel import load_otlp_json_metrics
+from robotics_acceptance_harness.policy import (
+    evaluate_data_plane_policy,
+    evaluate_evidence_policy,
+)
 from robotics_acceptance_harness.readiness import (
     GraphObserver,
     ReadinessResult,
@@ -26,13 +36,17 @@ from robotics_acceptance_harness.readiness import (
 )
 from robotics_acceptance_harness.result import (
     build_acceptance_result,
+    build_acceptance_result_v2,
     write_junit_xml,
     write_result_json,
 )
 from robotics_acceptance_harness.ros import RosGraphObserver
+from robotics_acceptance_harness.run_context import load_run_context
+from robotics_acceptance_harness.time_authority import evaluate_time_authority
 from robotics_acceptance_harness.timing import (
     ClockSample,
     TimingObservation,
+    TimingValidationError,
     evaluate_timing,
 )
 
@@ -57,12 +71,35 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _unevaluated_declarations(scenario: Mapping[str, Any]) -> list[str]:
+    if scenario["schema_version"] == "acceptance-scenario.v2":
+        return []
+    return [
+        f"$.{policy_name}.{field}"
+        for policy_name in ("data_plane_policy", "evidence_policy")
+        for field in sorted(scenario[policy_name])
+    ]
+
+
+def _run_domain_metrics(
+    samples: Sequence[MetricSample],
+    *,
+    run_id: str,
+    domain_id: str,
+) -> tuple[MetricSample, ...]:
+    return tuple(
+        sample
+        for sample in samples
+        if sample.attributes.get("run.id") == run_id
+        and sample.attributes.get("domain.id") == domain_id
+    )
+
+
 def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
     """Return the validated execution facts without starting an observation."""
 
-    scenario = bundle.scenario.data
-    assert bundle.runtime is not None
-    workload_kind = bundle.runtime.data["workload"]["kind"]
+    scenario = bundle.scenario_data
+    workload_kind = bundle.runtime_data["workload"]["kind"]
     return {
         "schema_version": bundle.scenario.schema_version,
         "scenario_id": scenario["scenario_id"],
@@ -85,6 +122,7 @@ def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
             "upload_mode": scenario["evidence_policy"]["upload_mode"],
             "retention_class": scenario["evidence_policy"]["retention_class"],
         },
+        "unevaluated": _unevaluated_declarations(scenario),
         "policy": (
             "accepted-simulation"
             if scenario["execution"]["target_environment"] == "simulation"
@@ -98,6 +136,17 @@ def _latest_metric(samples: Sequence[MetricSample], name: str) -> float | None:
     if not matches:
         return None
     return max(matches, key=lambda sample: sample.observed_at_ns).value
+
+
+def _measurement_metrics(
+    samples: Sequence[MetricSample],
+    *,
+    window_start_ns: int,
+    window_end_ns: int,
+) -> tuple[MetricSample, ...]:
+    return tuple(
+        sample for sample in samples if window_start_ns <= sample.observed_at_ns <= window_end_ns
+    )
 
 
 def _enrich_clock_samples(
@@ -128,7 +177,7 @@ def _enrich_clock_samples(
 def _wait_for_evidence(
     path: str | Path,
     *,
-    result_id: str,
+    run_id: str,
     timeout_sec: float,
     poll_interval_sec: float,
     now_ns: Callable[[], int],
@@ -141,34 +190,58 @@ def _wait_for_evidence(
             raise VerificationError(f"finalized evidence index did not appear: {source}")
         remaining_sec = max(0.0, (deadline_ns - now_ns()) / 1_000_000_000)
         sleep_fn(min(poll_interval_sec, remaining_sec))
-    return load_evidence_index(source, expected_run_id=result_id)
+    return load_evidence_index(source, expected_run_id=run_id)
 
 
 def run_verification(
     *,
+    run_id: str,
     bundle: DocumentBundle,
+    domain_id: str | None = None,
+    run_context_path: str | Path | None = None,
     evidence_index_path: str | Path,
     metric_samples: Sequence[MetricSample] = (),
     otel_metrics_path: str | Path | None = None,
     output_dir: str | Path,
     observer_factory: Callable[..., ClockObserver] = RosGraphObserver,
     now_ns: Callable[[], int] = monotonic_ns,
+    wall_time_ns: Callable[[], int] = time_ns,
     sleep_fn: Callable[[float], None] = sleep,
     utc_now: Callable[[], datetime] = _utc_now,
     poll_interval_sec: float = 0.05,
 ) -> VerificationOutputs:
     """Attach to a running execution and produce canonical acceptance outputs."""
 
-    if bundle.runtime is None:
-        raise VerificationError("verify requires a complete execution bundle")
-    scenario = bundle.scenario.data
+    if (
+        fullmatch(
+            r"run-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            run_id,
+        )
+        is None
+    ):
+        raise VerificationError("run_id must use canonical run-<uuid4> form")
+    scenario = bundle.scenario_data
     execution = scenario["execution"]
     physical = execution["target_environment"] in {"hil", "real_robot"}
     if physical and otel_metrics_path is None:
         raise VerificationError("physical observation requires --otel-metrics evidence")
     if physical and metric_samples:
         raise VerificationError("physical observation requires file-backed OTLP evidence")
-    result_id = str(scenario["scenario_id"])
+    is_v2 = bundle.scenario.schema_version == "acceptance-scenario.v2"
+    run_context = None
+    if is_v2:
+        if domain_id is None or run_context_path is None:
+            raise VerificationError("v2 verification requires domain_id and run_context_path")
+        if otel_metrics_path is None:
+            raise VerificationError("v2 verification requires --otel-metrics evidence")
+        run_context = load_run_context(
+            run_context_path,
+            run_id=run_id,
+            domain_id=domain_id,
+            scenario_id=str(scenario["scenario_id"]),
+            scenario_sha256=bundle.scenario.sha256,
+        )
+    result_id = f"result-{uuid4()}" if is_v2 else run_id
     observe_clock = execution["time_mode"] != "hardware_realtime"
     forbidden_monitor = ForbiddenGraphMonitor(scenario["forbidden_ros_graph"])
     observer = observer_factory(
@@ -179,6 +252,8 @@ def run_verification(
     started_at = utc_now()
     measurement_started_ns = 0
     measurement_finished_ns = 0
+    measurement_started_monotonic_ns = 0
+    measurement_finished_monotonic_ns = 0
     last_snapshot = None
     try:
         readiness = wait_for_readiness(
@@ -191,8 +266,9 @@ def run_verification(
             sleep_fn=sleep_fn,
             on_snapshot=forbidden_monitor.observe,
         )
-        measurement_started_ns = now_ns()
-        deadline_ns = measurement_started_ns + int(
+        measurement_started_ns = wall_time_ns()
+        measurement_started_monotonic_ns = now_ns()
+        deadline_ns = measurement_started_monotonic_ns + int(
             float(scenario["timeouts"]["execution_sec"]) * 1_000_000_000
         )
         last_snapshot = readiness.snapshot
@@ -201,11 +277,16 @@ def run_verification(
             forbidden_monitor.observe(last_snapshot)
             remaining_sec = max(0.0, (deadline_ns - now_ns()) / 1_000_000_000)
             sleep_fn(min(poll_interval_sec, remaining_sec))
-        measurement_finished_ns = now_ns()
+        measurement_finished_monotonic_ns = now_ns()
+        measurement_finished_ns = wall_time_ns()
+        if measurement_finished_ns < measurement_started_ns:
+            raise VerificationError("measurement wall clock moved backwards")
         raw_clock_samples = tuple(
             sample
             for sample in observer.clock_samples
-            if sample.observed_at_ns >= measurement_started_ns
+            if measurement_started_monotonic_ns
+            <= sample.observed_at_ns
+            <= measurement_finished_monotonic_ns
         )
     finally:
         observer.close()
@@ -213,7 +294,7 @@ def run_verification(
     assert last_snapshot is not None
     evidence = _wait_for_evidence(
         evidence_index_path,
-        result_id=result_id,
+        run_id=run_id,
         timeout_sec=float(scenario["timeouts"]["shutdown_sec"]),
         poll_interval_sec=poll_interval_sec,
         now_ns=now_ns,
@@ -230,13 +311,29 @@ def run_verification(
                 "OTLP metrics must be a verified local application/json evidence segment"
             )
         metrics_evidence_sha256 = str(metric_link["sha256"])
-        metric_samples = load_otlp_json_metrics(metrics_path)
+        metric_samples = load_otlp_json_metrics(
+            metrics_path,
+            expected_sha256=metrics_evidence_sha256,
+        )
+        if is_v2:
+            assert domain_id is not None
+            metric_samples = _run_domain_metrics(
+                metric_samples,
+                run_id=run_id,
+                domain_id=domain_id,
+            )
+    metric_samples = _measurement_metrics(
+        metric_samples,
+        window_start_ns=measurement_started_ns,
+        window_end_ns=measurement_finished_ns,
+    )
     readiness = ReadinessResult(
         snapshot=last_snapshot,
         first_ready_at_ns=readiness.first_ready_at_ns,
         stable_for_sec=readiness.stable_for_sec,
     )
     hardware_timing: HardwareTimingObservation | None = None
+    timing_failure: AssertionEvaluation | None = None
     if physical:
         hardware_timing = evaluate_hardware_timing(scenario["time_policy"], metric_samples)
         timing = TimingObservation(
@@ -254,29 +351,104 @@ def run_verification(
             raw_clock_samples,
             metric_samples,
         )
-        timing = evaluate_timing(execution, scenario["time_policy"], clock_samples)
-    assertions = evaluate_metric_assertions(scenario["assertions"], metric_samples)
+        try:
+            timing = evaluate_timing(execution, scenario["time_policy"], clock_samples)
+        except TimingValidationError as error:
+            timing = error.observation
+            timing_failure = AssertionEvaluation(
+                assertion_id="time-policy",
+                status="failed",
+                observed_value=None,
+                unit="1",
+                message=str(error),
+            )
+    if is_v2:
+        assertions = list(
+            evaluate_metric_assertions(
+                scenario["assertions"],
+                metric_samples,
+                window_start_ns=measurement_started_ns,
+                window_end_ns=measurement_finished_ns,
+            )
+        )
+    else:
+        assertions = list(evaluate_metric_assertions(scenario["assertions"], metric_samples))
+    if is_v2:
+        assert domain_id is not None
+        assertions.extend(
+            evaluate_data_plane_policy(
+                scenario["data_plane_policy"],
+                bundle.runtime_data,
+                metric_samples,
+                domain_id=domain_id,
+                window_start_ns=measurement_started_ns,
+                window_end_ns=measurement_finished_ns,
+            )
+        )
+        assertions.extend(evaluate_evidence_policy(scenario["evidence_policy"], evidence))
+    if timing_failure is not None:
+        assertions.append(timing_failure)
     forbidden_observation: ForbiddenGraphObservation = forbidden_monitor.result()
     finished_at = utc_now()
-    result = build_acceptance_result(
-        result_id=result_id,
-        bundle=bundle,
-        readiness=readiness,
-        timing=timing,
-        assertions=assertions,
-        started_at=started_at,
-        finished_at=finished_at,
-        monotonic_duration_sec=(measurement_finished_ns - measurement_started_ns) / 1_000_000_000,
-        shutdown={
-            "observer_detached": True,
-            "recorders_closed": True,
-            "evidence_index_finalized": True,
-        },
-        evidence_index=evidence,
-        forbidden_graph=forbidden_observation,
-        hardware_timing=hardware_timing,
-        hardware_timing_evidence_sha256=metrics_evidence_sha256,
-    )
+    shutdown = {
+        "observer_detached": True,
+        "recorders_closed": True,
+        "evidence_index_finalized": True,
+    }
+    monotonic_duration_sec = (
+        measurement_finished_monotonic_ns - measurement_started_monotonic_ns
+    ) / 1_000_000_000
+    if is_v2:
+        assert domain_id is not None
+        assert run_context is not None
+        assert metrics_evidence_sha256 is not None
+        time_authority = evaluate_time_authority(
+            scenario["time_policy"],
+            metric_samples,
+            run_id=run_id,
+            domain_id=domain_id,
+            source_id=str(run_context.data["time_authority"]["source_id"]),
+            window_start_ns=measurement_started_ns,
+            window_end_ns=measurement_finished_ns,
+        )
+        result = build_acceptance_result_v2(
+            result_id=result_id,
+            run_id=run_id,
+            domain_id=domain_id,
+            bundle=bundle,
+            readiness=readiness,
+            timing=timing,
+            time_authority=time_authority,
+            time_authority_evidence_sha256=metrics_evidence_sha256,
+            assertions=assertions,
+            unevaluated=_unevaluated_declarations(scenario),
+            started_at=started_at,
+            finished_at=finished_at,
+            monotonic_duration_sec=monotonic_duration_sec,
+            shutdown=shutdown,
+            evidence_index=evidence,
+            forbidden_graph=forbidden_observation,
+            hardware_timing=hardware_timing,
+            hardware_timing_evidence_sha256=(
+                metrics_evidence_sha256 if hardware_timing is not None else None
+            ),
+        )
+    else:
+        result = build_acceptance_result(
+            result_id=result_id,
+            bundle=bundle,
+            readiness=readiness,
+            timing=timing,
+            assertions=assertions,
+            started_at=started_at,
+            finished_at=finished_at,
+            monotonic_duration_sec=monotonic_duration_sec,
+            shutdown=shutdown,
+            evidence_index=evidence,
+            forbidden_graph=forbidden_observation,
+            hardware_timing=hardware_timing,
+            hardware_timing_evidence_sha256=metrics_evidence_sha256,
+        )
     destination = Path(output_dir).expanduser().resolve()
     result_path = write_result_json(result, destination / "acceptance-result.json")
     junit_path = write_junit_xml(result, destination / "junit.xml")

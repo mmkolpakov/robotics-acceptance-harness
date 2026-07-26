@@ -30,6 +30,7 @@ class VerifiedEvidence:
     index: LoadedDocument
     links: tuple[Mapping[str, Any], ...]
     local_files: Mapping[Path, Mapping[str, Any]]
+    mcap_summaries: tuple[LoadedDocument, ...] = ()
 
 
 def _platform_path(value: str) -> Path:
@@ -93,6 +94,37 @@ def _result_link(segment: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType({field: segment[field] for field in fields if field in segment})
 
 
+def _local_summary(
+    segment: Mapping[str, Any],
+    index: int,
+) -> LoadedDocument:
+    reference = segment["mcap_summary"]
+    json_path = f"$.segments[{index}].mcap_summary"
+    uri = urlsplit(str(reference["uri"]))
+    if uri.scheme != "file" or uri.netloc not in {"", "localhost"}:
+        raise EvidenceValidationError(
+            f"{json_path}.uri",
+            "acceptance verification requires a local MCAP summary",
+        )
+    path = _platform_path(unquote(uri.path)).resolve()
+    if not path.is_file():
+        raise EvidenceValidationError(f"{json_path}.uri", f"file does not exist: {path}")
+    if path.stat().st_size != reference["size_bytes"]:
+        raise EvidenceValidationError(f"{json_path}.size_bytes", "summary size differs")
+    try:
+        summary = load_document(path, expected_schemas={"mcap-summary.v1"})
+    except BundleValidationError as error:
+        raise EvidenceValidationError(error.json_path, error.validation_message) from error
+    if summary.sha256 != reference["sha256"]:
+        raise EvidenceValidationError(f"{json_path}.sha256", "summary digest differs")
+    if summary.data["source_sha256"] != segment["sha256"]:
+        raise EvidenceValidationError(
+            f"{json_path}.source_sha256",
+            "summary does not identify its MCAP segment",
+        )
+    return summary
+
+
 def load_evidence_index(
     path: str | Path,
     *,
@@ -101,7 +133,10 @@ def load_evidence_index(
     """Validate a finalized index and verify every reusable evidence link."""
 
     try:
-        document = load_document(path, expected_schemas={"evidence-index.v1"})
+        document = load_document(
+            path,
+            expected_schemas={"evidence-index.v1", "evidence-index.v2"},
+        )
     except BundleValidationError as error:
         raise EvidenceValidationError(error.json_path, error.validation_message) from error
     if expected_run_id is not None and document.data["run_id"] != expected_run_id:
@@ -112,6 +147,7 @@ def load_evidence_index(
 
     links: list[Mapping[str, Any]] = []
     local_files: dict[Path, Mapping[str, Any]] = {}
+    summaries: list[LoadedDocument] = []
     for index, segment in enumerate(document.data["segments"]):
         if segment["upload_status"] == "local":
             local_path, link = _local_link(segment, index)
@@ -119,7 +155,17 @@ def load_evidence_index(
             links.append(link)
         else:
             links.append(_remote_link(segment, index))
-    return VerifiedEvidence(document, tuple(links), MappingProxyType(local_files))
+        if (
+            document.schema_version == "evidence-index.v2"
+            and segment["media_type"] == "application/mcap"
+        ):
+            summaries.append(_local_summary(segment, index))
+    return VerifiedEvidence(
+        document,
+        tuple(links),
+        MappingProxyType(local_files),
+        tuple(summaries),
+    )
 
 
 __all__ = ["EvidenceValidationError", "VerifiedEvidence", "load_evidence_index"]

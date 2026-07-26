@@ -59,13 +59,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         help="Path to the dataset-manifest declared by a playback scenario.",
     )
-    group.addoption(
-        "--robotics-permit",
-        dest="robotics_permit_path",
-        metavar="PATH",
-        default=None,
-        help="Path to an execution-permit for a physical target.",
-    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -82,7 +75,6 @@ def pytest_configure(config: pytest.Config) -> None:
             runtime_path=config.getoption("robotics_runtime_path"),
             model_path=config.getoption("robotics_model_path"),
             dataset_path=config.getoption("robotics_dataset_path"),
-            permit_path=config.getoption("robotics_permit_path"),
         )
     except BundleValidationError as error:
         if error.validation_message.startswith("cannot parse"):

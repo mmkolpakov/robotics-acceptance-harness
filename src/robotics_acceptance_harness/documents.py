@@ -6,21 +6,84 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NotRequired, TypedDict, cast
 
 import yaml
 from robotics_runtime_contracts import validate_document
 
-from robotics_acceptance_harness.authorization import evaluate_physical_authorization
+from robotics_acceptance_harness.authorization import (
+    AuthorizationIssue,
+    evaluate_physical_authorization,
+)
+
+
+class RuntimeExecutionDocument(TypedDict):
+    target_environment: str
+    data_source: str
+    plant_backend: str
+    time_mode: str
+    data_plane_profile: str
+
+
+class ScenarioExecutionDocument(RuntimeExecutionDocument):
+    security_profile: str
+
+
+class ScenarioDocument(TypedDict):
+    schema_version: str
+    scenario_id: str
+    execution: ScenarioExecutionDocument
+    expected_ros_graph: Mapping[str, tuple[Mapping[str, Any], ...]]
+    forbidden_ros_graph: Mapping[str, tuple[Any, ...]]
+    timeouts: Mapping[str, float]
+    time_policy: Mapping[str, Any]
+    data_plane_policy: Mapping[str, Any]
+    evidence_policy: Mapping[str, Any]
+    assertions: tuple[Mapping[str, Any], ...]
+    model_manifest_sha256: NotRequired[str]
+    dataset_manifest_sha256: NotRequired[str]
+
+
+class RuntimeWorkloadDocument(TypedDict):
+    kind: str
+    model: NotRequired[Mapping[str, Any]]
+    inference: NotRequired[Mapping[str, Any]]
+
+
+class RuntimeDocument(TypedDict):
+    schema_version: str
+    execution: RuntimeExecutionDocument
+    security: Mapping[str, Any]
+    workload: RuntimeWorkloadDocument
+    data_plane: NotRequired[Mapping[str, Any]]
 
 
 class BundleValidationError(ValueError):
     """Raised when individually valid execution documents contradict each other."""
 
-    def __init__(self, json_path: str, message: str) -> None:
+    def __init__(
+        self,
+        json_path: str,
+        message: str,
+        *,
+        related: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         self.json_path = json_path
         self.validation_message = message
-        super().__init__(f"{json_path}: {message}")
+        self.issues = ((json_path, message), *related)
+        super().__init__("; ".join(f"{path}: {detail}" for path, detail in self.issues))
+
+    @classmethod
+    def from_authorization_issues(
+        cls,
+        issues: tuple[AuthorizationIssue, ...],
+    ) -> BundleValidationError:
+        first, *related = issues
+        return cls(
+            first.json_path,
+            first.message,
+            related=tuple((issue.json_path, issue.message) for issue in related),
+        )
 
 
 def _freeze(value: Any) -> Any:
@@ -45,11 +108,19 @@ class LoadedDocument:
 @dataclass(frozen=True, slots=True)
 class DocumentBundle:
     scenario: LoadedDocument
-    runtime: LoadedDocument | None = None
+    runtime: LoadedDocument
     model: LoadedDocument | None = None
     dataset: LoadedDocument | None = None
     permit: LoadedDocument | None = None
     verification: LoadedDocument | None = None
+
+    @property
+    def scenario_data(self) -> ScenarioDocument:
+        return cast(ScenarioDocument, self.scenario.data)
+
+    @property
+    def runtime_data(self) -> RuntimeDocument:
+        return cast(RuntimeDocument, self.runtime.data)
 
 
 def _read_mapping(path: Path) -> tuple[bytes, dict[str, Any]]:
@@ -100,8 +171,8 @@ def _require_equal(path: str, expected: Any, actual: Any) -> None:
 
 
 def _validate_execution_alignment(
-    scenario: Mapping[str, Any],
-    runtime: Mapping[str, Any],
+    scenario: ScenarioDocument,
+    runtime: RuntimeDocument,
 ) -> None:
     scenario_execution = scenario["execution"]
     runtime_execution = runtime["execution"]
@@ -125,8 +196,8 @@ def _validate_execution_alignment(
 
 
 def _validate_model_alignment(
-    scenario: Mapping[str, Any],
-    runtime: Mapping[str, Any],
+    scenario: ScenarioDocument,
+    runtime: RuntimeDocument,
     model: LoadedDocument | None,
 ) -> None:
     declared_digest = scenario.get("model_manifest_sha256")
@@ -172,7 +243,7 @@ def _validate_model_alignment(
 
 
 def _validate_dataset_alignment(
-    scenario: Mapping[str, Any],
+    scenario: ScenarioDocument,
     dataset: LoadedDocument | None,
 ) -> None:
     declared_digest = scenario.get("dataset_manifest_sha256")
@@ -202,6 +273,7 @@ def load_bundle(
         scenario_path,
         expected_schemas={
             "acceptance-scenario.v1",
+            "acceptance-scenario.v2",
         },
         extension_schemas=extension_schemas,
     )
@@ -238,14 +310,16 @@ def load_bundle(
         else None
     )
 
-    _validate_execution_alignment(scenario.data, runtime.data)
-    _validate_model_alignment(scenario.data, runtime.data, model)
-    _validate_dataset_alignment(scenario.data, dataset)
+    scenario_data = cast(ScenarioDocument, scenario.data)
+    runtime_data = cast(RuntimeDocument, runtime.data)
+    _validate_execution_alignment(scenario_data, runtime_data)
+    _validate_model_alignment(scenario_data, runtime_data, model)
+    _validate_dataset_alignment(scenario_data, dataset)
     checked_at = now or datetime.now(UTC)
     issues = evaluate_physical_authorization(
-        scenario=scenario.data,
+        scenario=scenario_data,
         scenario_sha256=scenario.sha256,
-        runtime=runtime.data,
+        runtime=runtime_data,
         permit=permit.data if permit is not None else None,
         permit_sha256=permit.sha256 if permit is not None else None,
         permit_path=permit.path if permit is not None else None,
@@ -255,7 +329,7 @@ def load_bundle(
         now=checked_at,
     )
     if issues:
-        raise BundleValidationError(issues[0].json_path, issues[0].message)
+        raise BundleValidationError.from_authorization_issues(issues)
     return DocumentBundle(
         scenario=scenario,
         runtime=runtime,
@@ -270,6 +344,11 @@ __all__ = [
     "BundleValidationError",
     "DocumentBundle",
     "LoadedDocument",
+    "RuntimeDocument",
+    "RuntimeExecutionDocument",
+    "RuntimeWorkloadDocument",
+    "ScenarioDocument",
+    "ScenarioExecutionDocument",
     "load_bundle",
     "load_document",
 ]

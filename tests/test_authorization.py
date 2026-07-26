@@ -52,7 +52,6 @@ def test_load_bundle_aligns_physical_authorization() -> None:
     bundle = _valid_bundle()
 
     assert bundle.scenario.schema_version == "acceptance-scenario.v1"
-    assert bundle.runtime is not None
     assert bundle.runtime.schema_version == "runtime-manifest.v1"
     assert bundle.permit is not None
     assert bundle.permit.schema_version == "execution-permit.v1"
@@ -63,6 +62,20 @@ def test_load_bundle_aligns_physical_authorization() -> None:
 def test_physical_bundle_requires_execution_verification() -> None:
     with pytest.raises(BundleValidationError, match="requires execution verification"):
         _valid_bundle(verification_path=None)
+
+
+def test_physical_bundle_reports_all_missing_authorization_documents() -> None:
+    with pytest.raises(BundleValidationError) as caught:
+        load_bundle(
+            FIXTURES / "hil-scenario.yaml",
+            runtime_path=FIXTURES / "hil-runtime.json",
+            now=NOW,
+        )
+
+    assert caught.value.issues == (
+        ("$.permit", "physical observation requires a permit"),
+        ("$.verification", "physical observation requires execution verification"),
+    )
 
 
 def test_operational_permit_must_be_json(tmp_path: Path) -> None:

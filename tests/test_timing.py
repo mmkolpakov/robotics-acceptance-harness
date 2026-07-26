@@ -33,6 +33,41 @@ def test_backwards_clock_is_rejected_in_every_mode() -> None:
         )
 
 
+def test_stepped_timing_accepts_declared_multiples() -> None:
+    samples = [
+        ClockSample(0, 0),
+        ClockSample(1_000_000, 1_000_000),
+        ClockSample(2_000_000, 2_000_000),
+    ]
+
+    result = evaluate_timing(
+        {"time_mode": "simulation_stepped"},
+        {"step_size_sec": 0.001, "max_skipped_steps": 0},
+        samples,
+    )
+
+    assert result.monotonic
+
+
+def test_stepped_timing_rejects_large_jump() -> None:
+    samples = [
+        ClockSample(0, 0),
+        ClockSample(1_000_000, 999_000_000_000),
+    ]
+
+    with pytest.raises(TimingValidationError) as caught:
+        evaluate_timing(
+            {"time_mode": "simulation_stepped"},
+            {"step_size_sec": 0.001, "max_skipped_steps": 0},
+            samples,
+        )
+
+    assert caught.value.observation.monotonic
+    assert any(
+        issue.json_path == "$.time_policy.max_skipped_steps" for issue in caught.value.issues
+    )
+
+
 def test_realtime_policy_rejects_slow_or_late_execution() -> None:
     samples = [
         ClockSample(0, 0, real_time_factor=0.7, deadline_miss_ratio=0.1),
@@ -58,21 +93,3 @@ def test_playback_requires_clock_progress_and_frequency() -> None:
             samples,
         )
     assert caught.value.issues[0].json_path == "$.time_policy.min_clock_hz"
-
-
-def test_hardware_time_checks_offset_drift_and_message_age() -> None:
-    samples = [
-        ClockSample(0, 0, offset_ms=6, drift_ppm=5, message_age_ms=20),
-        ClockSample(1, 1, offset_ms=4, drift_ppm=30, message_age_ms=60),
-    ]
-    with pytest.raises(TimingValidationError) as caught:
-        evaluate_timing(
-            {"time_mode": "hardware_realtime"},
-            {
-                "max_clock_offset_ms": 5,
-                "max_clock_drift_ppm": 20,
-                "max_message_age_ms": 50,
-            },
-            samples,
-        )
-    assert len(caught.value.issues) == 3

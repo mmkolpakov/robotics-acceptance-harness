@@ -17,6 +17,7 @@ from robotics_acceptance_harness.forbidden_graph import ForbiddenGraphObservatio
 from robotics_acceptance_harness.hardware_timing import HardwareTimingObservation
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import GraphSnapshot, ReadinessResult
+from robotics_acceptance_harness.time_authority import TimeAuthorityObservation
 from robotics_acceptance_harness.timing import TimingObservation
 
 
@@ -50,7 +51,7 @@ def _observed_graph(readiness: ReadinessResult) -> dict[str, Any]:
                 "first_message_at_ns": observation.first_message_at_ns,
             }
             for name, observation in sorted(snapshot.topics.items())
-            if observation.first_message_at_ns is not None
+            if observation.first_message_at_ns is not None and observation.types
         ],
         "services": [
             {"name": name, "type": observation.types[0], "servers": observation.servers}
@@ -60,7 +61,7 @@ def _observed_graph(readiness: ReadinessResult) -> dict[str, Any]:
         "actions": [
             {"name": name, "type": observation.types[0], "servers": observation.servers}
             for name, observation in sorted(snapshot.actions.items())
-            if observation.servers > 0 and observation.types
+            if (observation.servers > 0 or observation.clients > 0) and observation.types
         ],
     }
 
@@ -150,8 +151,6 @@ def build_acceptance_result(
 ) -> dict[str, Any]:
     """Build and validate the canonical acceptance result."""
 
-    if bundle.runtime is None:
-        raise ValueError("acceptance-result.v1 requires a runtime manifest")
     if evidence_index is not None:
         if evidence:
             raise ValueError("provide evidence or evidence_index, not both")
@@ -234,6 +233,76 @@ def build_acceptance_result(
     return result
 
 
+def build_acceptance_result_v2(
+    *,
+    result_id: str,
+    run_id: str,
+    domain_id: str,
+    bundle: DocumentBundle,
+    readiness: ReadinessResult,
+    timing: TimingObservation,
+    time_authority: TimeAuthorityObservation,
+    time_authority_evidence_sha256: str,
+    assertions: Sequence[AssertionEvaluation],
+    unevaluated: Sequence[str],
+    started_at: datetime,
+    finished_at: datetime,
+    monotonic_duration_sec: float,
+    shutdown: Mapping[str, bool],
+    evidence_index: VerifiedEvidence,
+    forbidden_graph: ForbiddenGraphObservation,
+    hardware_timing: HardwareTimingObservation | None = None,
+    hardware_timing_evidence_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Build and validate a run-scoped per-domain acceptance result."""
+
+    if evidence_index.index.data["run_id"] != run_id:
+        raise ValueError("evidence index run_id must equal result run_id")
+    result = build_acceptance_result(
+        result_id=result_id,
+        bundle=bundle,
+        readiness=readiness,
+        timing=timing,
+        assertions=assertions,
+        started_at=started_at,
+        finished_at=finished_at,
+        monotonic_duration_sec=monotonic_duration_sec,
+        shutdown=shutdown,
+        evidence=evidence_index.links,
+        forbidden_graph=forbidden_graph,
+        hardware_timing=hardware_timing,
+        hardware_timing_evidence_sha256=hardware_timing_evidence_sha256,
+    )
+    result.update(
+        {
+            "schema_version": "acceptance-result.v2",
+            "result_id": result_id,
+            "run_id": run_id,
+            "scenario_id": bundle.scenario.data["scenario_id"],
+            "domain_id": domain_id,
+            "verdict_scope": "domain",
+            "unevaluated": sorted(set(unevaluated)),
+            "time_authority_observation": {
+                "source_id": time_authority.source_id,
+                "sample_count": time_authority.sample_count,
+                "window_start_ns": time_authority.window_start_ns,
+                "window_end_ns": time_authority.window_end_ns,
+                "p50_offset_ms": time_authority.p50_offset_ms,
+                "p95_offset_ms": time_authority.p95_offset_ms,
+                "max_offset_ms": time_authority.max_offset_ms,
+                "within_policy": time_authority.within_policy,
+                "evidence_sha256": time_authority_evidence_sha256,
+            },
+        }
+    )
+    if result["status"] != "error" and not time_authority.within_policy:
+        result["status"] = "failed"
+    elif result["status"] == "passed" and result["unevaluated"]:
+        result["status"] = "incomplete"
+    validate_document(result)
+    return result
+
+
 def _temporary_path(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = mkstemp(
@@ -245,15 +314,15 @@ def _temporary_path(path: Path) -> Path:
     return Path(name)
 
 
-def write_result_json(result: Mapping[str, Any], path: str | Path) -> Path:
-    """Validate and atomically write an acceptance result as canonical JSON."""
+def write_contract_json(document: Mapping[str, Any], path: str | Path) -> Path:
+    """Validate and atomically write a contract document as canonical JSON."""
 
-    validate_document(result)
+    validate_document(document)
     destination = Path(path).expanduser().resolve()
     temporary_path = _temporary_path(destination)
     try:
         with temporary_path.open("w", encoding="utf-8", newline="\n") as temporary:
-            json.dump(result, temporary, indent=2, sort_keys=True)
+            json.dump(document, temporary, indent=2, sort_keys=True)
             temporary.write("\n")
             temporary.flush()
             os.fsync(temporary.fileno())
@@ -262,6 +331,12 @@ def write_result_json(result: Mapping[str, Any], path: str | Path) -> Path:
         temporary_path.unlink(missing_ok=True)
         raise
     return destination
+
+
+def write_result_json(result: Mapping[str, Any], path: str | Path) -> Path:
+    """Validate and atomically write an acceptance result as canonical JSON."""
+
+    return write_contract_json(result, path)
 
 
 def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
@@ -289,12 +364,26 @@ def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
                 "message": "" if hardware["within_policy"] else "hardware timing out of policy",
             }
         )
-    if not assertion_results:
+    time_authority = result.get("time_authority_observation")
+    if time_authority is not None:
         assertion_results.append(
             {
-                "assertion_id": "acceptance",
-                "status": result["status"],
-                "message": "",
+                "assertion_id": "time-authority-policy",
+                "status": "passed" if time_authority["within_policy"] else "failed",
+                "message": (
+                    ""
+                    if time_authority["within_policy"]
+                    else "time-authority evidence is out of policy"
+                ),
+            }
+        )
+    unevaluated = result.get("unevaluated", [])
+    if unevaluated:
+        assertion_results.append(
+            {
+                "assertion_id": "evaluation-coverage",
+                "status": "failed",
+                "message": f"unevaluated declarations: {', '.join(unevaluated)}",
             }
         )
     for assertion in assertion_results:
@@ -319,4 +408,10 @@ def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
     return destination
 
 
-__all__ = ["build_acceptance_result", "write_junit_xml", "write_result_json"]
+__all__ = [
+    "build_acceptance_result",
+    "build_acceptance_result_v2",
+    "write_contract_json",
+    "write_junit_xml",
+    "write_result_json",
+]

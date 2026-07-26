@@ -52,6 +52,8 @@ published by
 | --- | --- | --- |
 | Validate and explain an execution bundle | `robotics-acceptance explain` | No |
 | Observe a running execution and decide a verdict | `robotics-acceptance verify` | No |
+| Aggregate the complete set of domain results | `robotics-acceptance aggregate` | No |
+| Evaluate cross-domain causal chains | `robotics-acceptance trace-evaluate` | No |
 | Reuse a validated simulation bundle in project tests | `robotics_bundle` pytest fixture | No |
 
 ## Baseline
@@ -59,8 +61,10 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts` 0.6.0 |
-| Documents | `acceptance-scenario.v1`, `runtime-manifest.v1`, `acceptance-result.v1` |
+| Contracts | `robotics-runtime-contracts>=0.7.0,<0.8` |
+| Scenarios | `acceptance-scenario.v1`, `acceptance-scenario.v2` |
+| Results | `acceptance-result.v1`, `acceptance-result.v2` |
+| Aggregates | `acceptance-aggregate.v1`, `acceptance-aggregate.v2` |
 | ROS observation | ROS 2 Jazzy with `rclpy` and declared message packages |
 | Metrics | Newline-delimited OTLP JSON from the Collector file exporter |
 
@@ -69,26 +73,28 @@ joins an existing `ROS_DOMAIN_ID`. Hardware support is qualified by the runtime
 infrastructure for an exact source revision, image digest, and device; installing
 this package alone does not qualify a target.
 
-## Install
+## Development Install
 
 ```bash
-python -m pip install \
-  https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.7.1/robotics_acceptance_harness-0.7.1-py3-none-any.whl
-robotics-acceptance --version
+git clone https://github.com/mmkolpakov/robotics-runtime-contracts.git
+git clone https://github.com/mmkolpakov/robotics-acceptance-harness.git
+cd robotics-acceptance-harness
+uv sync --locked --all-groups
+uv run robotics-acceptance --version
 ```
 
-Use the acceptance-observer image from `robotics-runtime-infra` when ROS 2
-Jazzy packages are required. A plain Python environment is sufficient for
-`explain` and the pytest plugin.
+Keep both repositories as sibling directories. The published harness metadata
+contains a standard contracts version range; the sibling path in
+`tool.uv.sources` is only a development and CI source. The acceptance-observer
+image from `robotics-runtime-infra` supplies ROS 2 Jazzy packages for live
+observation. A plain Python environment is sufficient for document-only
+commands and the pytest plugin.
 
 ## Quick Start
 
-Clone the repository to use its known-good simulation fixture:
+Use the known-good simulation fixture after the development install:
 
 ```bash
-git clone https://github.com/mmkolpakov/robotics-acceptance-harness.git
-cd robotics-acceptance-harness
-uv sync --locked
 uv run robotics-acceptance explain \
   --scenario tests/fixtures/simulation/scenario.yaml \
   --runtime tests/fixtures/simulation/runtime.yaml
@@ -108,6 +114,9 @@ then attach the observer:
 robotics-acceptance verify \
   --scenario /run/robotics/scenario.yaml \
   --runtime /run/robotics/runtime-manifest.json \
+  --run-id run-7dd792f2-4f75-4f4d-81b0-48c8c2a8f76c \
+  --domain-id cell \
+  --run-context /run/robotics/acceptance-run.json \
   --evidence-index /run/robotics/evidence-index.json \
   --otel-metrics /run/robotics/metrics.otlp.json \
   --output /run/robotics/results
@@ -124,18 +133,47 @@ invalid input or an observation error. Outputs are written atomically:
 The OTLP file is accepted only when the finalized evidence index covers its
 exact path, media type, byte size, and SHA-256 digest.
 
+`--domain-id` and `--run-context` are required for
+`acceptance-scenario.v2`. A v1 scenario omits both options; `--run-id` remains
+required for every verification.
+
+## Aggregate Results
+
+Aggregate exactly the domains declared by one immutable run context:
+
+```bash
+robotics-acceptance aggregate \
+  --run-context /run/robotics/acceptance-run.json \
+  --result /run/robotics/domain-a/acceptance-result.json \
+  --result /run/robotics/domain-b/acceptance-result.json \
+  --output /run/robotics/acceptance-aggregate.json
+```
+
+`trace-evaluate` extends a valid domain aggregate with channel observations and
+verified per-domain OTLP trace evidence. Repeat `--causal-chain` for independent
+or branching flows, and run `robotics-acceptance trace-evaluate --help` for the
+repeatable `DOMAIN=PATH` arguments. Both commands return `0` for `passed`, `1`
+for a completed non-passing verdict, and `2` for invalid input.
+
+For each channel, the first producer span opens the declared observation
+window. Every counted producer and consumer span must fit completely inside
+that window. Producer message identifiers must be unique; repeated consumer
+identifiers are counted as duplicate deliveries and evaluated against the
+channel contract.
+
 ## Inputs
 
 | Input | Required when | Contract |
 | --- | --- | --- |
-| Scenario | Always | `acceptance-scenario.v1` |
-| Runtime manifest | Always | `runtime-manifest.v1` |
+| Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v1` or `.v2` |
+| Runtime manifest | `explain`, `verify`, pytest | `runtime-manifest.v1` |
 | Model manifest | Inference workload | `model-artifact-manifest.v1` |
 | Dataset manifest | MCAP playback | `dataset-manifest.v1` |
 | Execution permit | HIL or real target | `execution-permit.v1` |
 | Verification record | HIL or real target | `execution-verification.v1` |
-| Evidence index | `verify` | `evidence-index.v1` |
+| Evidence index | `verify` | `evidence-index.v1` or `.v2` |
 | Metrics | Metric assertions or physical observation | OTLP JSON |
+| Run context | v2 `verify`, `aggregate`, `trace-evaluate` | `acceptance-run.v1` |
 
 Local domain extensions remain explicit and digest-pinned:
 
@@ -164,9 +202,11 @@ target identity, hardware scope, policy digest, and validity interval.
 Every forbidden command topic, service, and action is monitored during graph
 readiness and throughout the measurement window. Any publisher or server,
 including a transient one, fails the result. Expected topics are checked for
-type, publisher and subscriber counts, QoS compatibility, and first-message
-deadline. Managed nodes must remain in their required state for the declared
-stability window; the harness never requests a lifecycle transition.
+type, publisher and subscriber counts, first-message deadline, and publisher
+compatibility with the observer's declared subscription QoS. This does not
+prove compatibility between arbitrary application endpoints. Managed nodes
+must remain in their required state for the declared stability window; the
+harness never requests a lifecycle transition.
 
 Physical observation also validates aligned OTLP measurements for clock offset,
 clock drift, message age, and monotonicity, including their units, source, and
@@ -178,12 +218,34 @@ Project-owned simulation tests can consume the validated bundle directly:
 
 ```bash
 uv run pytest \
+  -p robotics_acceptance_harness.plugin \
   --robotics-scenario scenario.yaml \
   --robotics-runtime runtime.json
 ```
 
 Use `robotics_bundle` for the cross-checked bundle or `robotics_scenario` for
-the immutable scenario mapping. The plugin refuses physical targets.
+the immutable scenario mapping. The plugin exposes no permit option and refuses
+physical targets.
+
+## Environment and CLI
+
+Document paths, run identity, domain identity, and output paths are CLI
+arguments. The harness defines no private environment-variable fallback for
+them.
+
+Live ROS observation inherits standard ROS environment from the runtime:
+
+| Variable | Purpose |
+| --- | --- |
+| `ROS_DOMAIN_ID` | Select the domain observed by `verify` |
+| `RMW_IMPLEMENTATION` | Select the qualified ROS middleware implementation |
+| `ROS_SECURITY_ENABLE` | Enable DDS Security in the ROS client |
+| `ROS_SECURITY_STRATEGY` | Use `Enforce` for a protected deployment |
+| `ROS_SECURITY_KEYSTORE` | Locate the externally provisioned SROS2 keystore |
+
+`explain`, `aggregate`, and `trace-evaluate` do not join a ROS graph. A
+`run_id` uses the canonical lowercase `run-<uuid4>` form. For complete command
+syntax, use `robotics-acceptance COMMAND --help`.
 
 ## Development
 
@@ -191,6 +253,7 @@ the immutable scenario mapping. The plugin refuses physical targets.
 uv sync --locked --all-groups
 uv run pre-commit run --all-files
 uv run coverage run --branch -m pytest \
+  -p robotics_acceptance_harness.plugin \
   --robotics-scenario tests/fixtures/simulation/scenario.yaml \
   --robotics-runtime tests/fixtures/simulation/runtime.yaml
 uv run coverage report --fail-under=80
@@ -200,3 +263,13 @@ uv build --no-sources
 Semgrep enforces the attach-only boundary and tests its policy rules. Security
 reports follow [SECURITY.md](SECURITY.md), contributions follow
 [CONTRIBUTING.md](CONTRIBUTING.md), and the project uses the [MIT License](LICENSE).
+
+## Project Policies
+
+* [Compatibility policy](docs/compatibility.md)
+* [Architecture decisions](docs/decisions/README.md)
+* [Supply-chain assurance](docs/supply-chain.md)
+* [REP-2004 quality declaration](QUALITY_DECLARATION.md)
+
+The package currently claims REP-2004 **Quality Level 4**. It is pre-`1.0.0`
+and does not claim the stable-version requirement of Quality Level 3.

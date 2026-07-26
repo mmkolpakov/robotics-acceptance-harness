@@ -6,6 +6,7 @@ from hashlib import sha256
 from os import name as os_name
 from pathlib import Path
 
+import pytest
 import yaml
 from junitparser import JUnitXml
 from robotics_runtime_contracts import validate_document
@@ -21,9 +22,11 @@ from robotics_acceptance_harness.readiness import (
 )
 from robotics_acceptance_harness.result import (
     build_acceptance_result,
+    build_acceptance_result_v2,
     write_junit_xml,
     write_result_json,
 )
+from robotics_acceptance_harness.time_authority import TimeAuthorityObservation
 from robotics_acceptance_harness.timing import TimingObservation
 
 FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
@@ -118,3 +121,61 @@ def test_result_links_only_verified_evidence(tmp_path: Path) -> None:
 
     assert result["evidence"][0]["uri"] == segment.as_uri()
     assert "local_path" not in result["evidence"][0]
+
+
+def test_v2_result_rejects_evidence_from_another_run(tmp_path: Path) -> None:
+    segment = tmp_path / "metrics.json"
+    segment.write_bytes(b"evidence")
+    local_path = segment.as_posix()
+    if os_name == "nt":
+        local_path = f"/{local_path}"
+    index_path = tmp_path / "evidence-index.yaml"
+    index_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "evidence-index.v1",
+                "run_id": "run-00000000-0000-4000-8000-000000000001",
+                "generated_at": "2026-07-11T12:01:00Z",
+                "finalized": True,
+                "segments": [
+                    {
+                        "uri": segment.as_uri(),
+                        "local_path": local_path,
+                        "media_type": "application/json",
+                        "sha256": sha256(segment.read_bytes()).hexdigest(),
+                        "size_bytes": segment.stat().st_size,
+                        "retention_class": "pull-request-7d",
+                        "segment_index": 0,
+                        "upload_status": "local",
+                        "checksum_verified": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = load_evidence_index(index_path)
+    inputs = result_inputs()
+    inputs.pop("result_id")
+
+    with pytest.raises(ValueError, match="evidence index run_id"):
+        build_acceptance_result_v2(
+            result_id="result-00000000-0000-4000-8000-000000000001",
+            run_id="run-00000000-0000-4000-8000-000000000002",
+            domain_id="camera-domain",
+            time_authority=TimeAuthorityObservation(
+                source_id="simulation-clock",
+                sample_count=30,
+                window_start_ns=1,
+                window_end_ns=2,
+                p50_offset_ms=0,
+                p95_offset_ms=0,
+                max_offset_ms=0,
+                within_policy=True,
+            ),
+            time_authority_evidence_sha256="f" * 64,
+            assertions=(),
+            unevaluated=(),
+            evidence_index=evidence,
+            **inputs,
+        )
