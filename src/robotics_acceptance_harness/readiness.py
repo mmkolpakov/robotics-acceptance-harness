@@ -20,6 +20,7 @@ class TopicObservation:
 class EndpointObservation:
     types: tuple[str, ...]
     servers: int
+    clients: int = 0
 
 
 @dataclass(frozen=True, slots=True)

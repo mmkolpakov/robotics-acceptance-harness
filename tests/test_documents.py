@@ -17,7 +17,6 @@ def test_load_bundle_cross_checks_execution_documents() -> None:
     )
 
     assert bundle.scenario.schema_version == "acceptance-scenario.v1"
-    assert bundle.runtime is not None
     assert bundle.runtime.schema_version == "runtime-manifest.v1"
     assert bundle.runtime.data["workload"]["kind"] == "none"
 

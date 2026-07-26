@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ def _number_value(point: Any) -> float | None:
     return None
 
 
-def _attribute_value(value: Any) -> MetricAttribute | None:
+def otlp_attribute_value(value: Any) -> MetricAttribute | None:
     value_kind = value.WhichOneof("value")
     if value_kind == "string_value":
         return str(value.string_value)
@@ -38,24 +39,37 @@ def _attribute_value(value: Any) -> MetricAttribute | None:
     return None
 
 
-def _attributes(items: Any) -> dict[str, MetricAttribute]:
+def otlp_attributes(items: Any) -> dict[str, MetricAttribute]:
     attributes: dict[str, MetricAttribute] = {}
     for item in items:
-        value = _attribute_value(item.value)
+        value = otlp_attribute_value(item.value)
         if value is not None:
             attributes[str(item.key)] = value
     return attributes
 
 
-def load_otlp_json_metrics(path: str | Path) -> tuple[MetricSample, ...]:
+def load_otlp_json_metrics(
+    path: str | Path,
+    *,
+    expected_sha256: str | None = None,
+) -> tuple[MetricSample, ...]:
     """Read newline-delimited OTLP JSON emitted by the Collector file exporter."""
 
     source = Path(path).expanduser().resolve()
     samples: list[MetricSample] = []
     try:
-        lines = source.read_text(encoding="utf-8").splitlines()
+        payload_bytes = source.read_bytes()
     except OSError as error:
         raise MetricInputError(f"cannot read {source}: {error}") from error
+    observed_sha256 = sha256(payload_bytes).hexdigest()
+    if expected_sha256 is not None and observed_sha256 != expected_sha256:
+        raise MetricInputError(
+            f"{source} digest differs: expected {expected_sha256}; observed {observed_sha256}"
+        )
+    try:
+        lines = payload_bytes.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise MetricInputError(f"cannot decode {source} as UTF-8: {error}") from error
 
     for line_number, line in enumerate(lines, start=1):
         if not line.strip():
@@ -69,11 +83,11 @@ def load_otlp_json_metrics(path: str | Path) -> tuple[MetricSample, ...]:
             ) from error
 
         for resource_metrics in request.resource_metrics:
-            resource_attributes = _attributes(resource_metrics.resource.attributes)
+            resource_attributes = otlp_attributes(resource_metrics.resource.attributes)
             for scope_metrics in resource_metrics.scope_metrics:
                 scope_attributes = {
                     **resource_attributes,
-                    **_attributes(scope_metrics.scope.attributes),
+                    **otlp_attributes(scope_metrics.scope.attributes),
                 }
                 for metric in scope_metrics.metrics:
                     data_kind = metric.WhichOneof("data")
@@ -92,11 +106,16 @@ def load_otlp_json_metrics(path: str | Path) -> tuple[MetricSample, ...]:
                                 observed_at_ns=int(point.time_unix_nano),
                                 attributes={
                                     **scope_attributes,
-                                    **_attributes(point.attributes),
+                                    **otlp_attributes(point.attributes),
                                 },
                             )
                         )
     return tuple(samples)
 
 
-__all__ = ["MetricInputError", "load_otlp_json_metrics"]
+__all__ = [
+    "MetricInputError",
+    "load_otlp_json_metrics",
+    "otlp_attribute_value",
+    "otlp_attributes",
+]

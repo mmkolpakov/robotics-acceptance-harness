@@ -80,7 +80,12 @@ class RosGraphObserver:
             self._get_message = utilities.get_message
             self._get_state_type = lifecycle_services.GetState
             self._clock_type = clock_messages.Clock
-            self._get_action_names_and_types = actions.get_action_names_and_types
+            self._get_action_server_names_and_types_by_node = (
+                actions.get_action_server_names_and_types_by_node
+            )
+            self._get_action_client_names_and_types_by_node = (
+                actions.get_action_client_names_and_types_by_node
+            )
             self._lifecycle: dict[str, _LifecycleTracker] = {}
             self._configure_topics(observe_clock)
             self._configure_lifecycle()
@@ -161,6 +166,34 @@ class RosGraphObserver:
             if tracker.future is None and tracker.client.service_is_ready():
                 tracker.future = tracker.client.call_async(tracker.request_type())
 
+    def _action_observations(self) -> dict[str, EndpointObservation]:
+        types: dict[str, set[str]] = {}
+        servers: dict[str, int] = {}
+        clients: dict[str, int] = {}
+        for node_name, node_namespace in self._node.get_node_names_and_namespaces():
+            for name, action_types in self._get_action_server_names_and_types_by_node(
+                self._node,
+                node_name,
+                node_namespace,
+            ):
+                types.setdefault(name, set()).update(action_types)
+                servers[name] = servers.get(name, 0) + 1
+            for name, action_types in self._get_action_client_names_and_types_by_node(
+                self._node,
+                node_name,
+                node_namespace,
+            ):
+                types.setdefault(name, set()).update(action_types)
+                clients[name] = clients.get(name, 0) + 1
+        return {
+            name: EndpointObservation(
+                types=tuple(sorted(types.get(name, ()))),
+                servers=servers.get(name, 0),
+                clients=clients.get(name, 0),
+            )
+            for name in self._observed_names("actions")
+        }
+
     def _qos_compatible(self, topic: str) -> bool:
         profile = self._topic_qos[topic]
         publisher_info = self._node.get_publishers_info_by_topic(topic)
@@ -200,14 +233,7 @@ class RosGraphObserver:
             )
             for name in self._observed_names("services")
         }
-        action_types = dict(self._get_action_names_and_types(self._node))
-        actions = {
-            name: EndpointObservation(
-                types=tuple(action_types.get(name, ())),
-                servers=int(name in action_types),
-            )
-            for name in self._observed_names("actions")
-        }
+        actions = self._action_observations()
         lifecycle = {
             name: tracker.observation
             for name, tracker in self._lifecycle.items()

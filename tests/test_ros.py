@@ -71,6 +71,9 @@ class FakeNode:
     def count_services(self, _name: str) -> int:
         return 1
 
+    def get_node_names_and_namespaces(self) -> list[tuple[str, str]]:
+        return [("application", "/")]
+
     def destroy_node(self) -> None:
         self.destroyed = True
 
@@ -147,11 +150,16 @@ def fake_modules(node: FakeNode) -> dict[str, object]:
             create_node=lambda *_args, **_kwargs: node,
         ),
         "rclpy.action": SimpleNamespace(
-            get_action_names_and_types=lambda observed_node: (
+            get_action_server_names_and_types_by_node=lambda observed_node, *_args: (
                 [("/takeoff", ["example_interfaces/action/Fibonacci"])]
                 if observed_node is node
                 else []
-            )
+            ),
+            get_action_client_names_and_types_by_node=lambda observed_node, *_args: (
+                [("/land", ["example_interfaces/action/Fibonacci"])]
+                if observed_node is node
+                else []
+            ),
         ),
         "rclpy.context": SimpleNamespace(Context=FakeContext),
         "rclpy.executors": SimpleNamespace(SingleThreadedExecutor=FakeExecutor),
@@ -238,5 +246,6 @@ def test_ros_observer_queries_forbidden_names_without_subscribing() -> None:
     assert snapshot.topics["/cmd_vel"].publishers == 1
     assert snapshot.services["/arm"].servers == 1
     assert snapshot.actions["/land"].servers == 0
+    assert snapshot.actions["/land"].clients == 1
     assert "/cmd_vel" not in node.callbacks
     observer.close()

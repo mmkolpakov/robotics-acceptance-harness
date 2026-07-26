@@ -1,0 +1,493 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from robotics_acceptance_harness import __version__
+from robotics_acceptance_harness.documents import BundleValidationError, load_document
+from robotics_acceptance_harness.evidence import load_evidence_index
+from robotics_acceptance_harness.result import write_contract_json
+from robotics_acceptance_harness.traces import (
+    CausalHop,
+    ChainViolation,
+    evaluate_causal_chain,
+    evaluate_channel_delivery,
+    load_otlp_json_traces,
+    validate_trace_set,
+)
+
+
+def _iso8601(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _domain_aggregate(statuses: set[str]) -> str:
+    return (
+        "error"
+        if "error" in statuses
+        else "failed"
+        if "failed" in statuses
+        else "incomplete"
+        if "incomplete" in statuses
+        else "cancelled"
+        if "cancelled" in statuses
+        else "passed"
+    )
+
+
+def aggregate_results(
+    *,
+    run_context_path: str | Path,
+    result_paths: Sequence[str | Path],
+    output_path: str | Path,
+    aggregate_id: str | None = None,
+    generated_at: datetime | None = None,
+) -> Path:
+    """Validate and aggregate the complete per-domain result registry for one run."""
+
+    context_path = Path(run_context_path).expanduser().resolve()
+    context = load_document(context_path, expected_schemas={"acceptance-run.v1"})
+    if not result_paths:
+        raise BundleValidationError("$.per_domain_results", "at least one result is required")
+
+    resolved_result_paths = [Path(path).expanduser().resolve() for path in result_paths]
+    results = [
+        load_document(path, expected_schemas={"acceptance-result.v2"})
+        for path in resolved_result_paths
+    ]
+    expected_domains = {item["domain_id"] for item in context.data["domains"]}
+    observed_domains = {item.data["domain_id"] for item in results}
+    if observed_domains != expected_domains:
+        missing = sorted(expected_domains - observed_domains)
+        unexpected = sorted(observed_domains - expected_domains)
+        raise BundleValidationError(
+            "$.per_domain_results",
+            f"domain registry mismatch; missing={missing}, unexpected={unexpected}",
+        )
+
+    result_ids = [item.data["result_id"] for item in results]
+    if len(result_ids) != len(set(result_ids)):
+        raise BundleValidationError("$.per_domain_results", "result_id values must be unique")
+    for result in results:
+        if result.data["run_id"] != context.data["run_id"]:
+            raise BundleValidationError("$.run_id", "result belongs to another run")
+        if result.data["scenario_id"] != context.data["scenario_id"]:
+            raise BundleValidationError("$.scenario_id", "result belongs to another scenario")
+        if result.data["scenario_sha256"] != context.data["scenario_sha256"]:
+            raise BundleValidationError(
+                "$.scenario_sha256",
+                "result scenario digest differs from the run context",
+            )
+        if (
+            result.data["time_authority_observation"]["source_id"]
+            != context.data["time_authority"]["source_id"]
+        ):
+            raise BundleValidationError(
+                "$.time_authority_observation.source_id",
+                "result uses another time authority",
+            )
+
+    aggregate_status = _domain_aggregate({str(item.data["status"]) for item in results})
+    aggregate: dict[str, Any] = {
+        "schema_version": "acceptance-aggregate.v1",
+        "aggregate_id": aggregate_id or f"aggregate-{uuid4()}",
+        "run_id": context.data["run_id"],
+        "acceptance_run_sha256": context.sha256,
+        "generated_at": _iso8601(generated_at or datetime.now(UTC)),
+        "per_domain_results": [
+            {
+                "domain_id": result.data["domain_id"],
+                "result_id": result.data["result_id"],
+                "result_sha256": result.sha256,
+                "status": result.data["status"],
+            }
+            for result in sorted(results, key=lambda item: item.data["domain_id"])
+        ],
+        "per_domain_aggregate": aggregate_status,
+        "cross_domain_e2e": {
+            "status": "unevaluated",
+            "reason": "trace_evidence_not_evaluated",
+        },
+    }
+    context_digest = sha256(context_path.read_bytes()).hexdigest()
+    if context_digest != context.sha256:
+        raise BundleValidationError(
+            "$.acceptance_run_sha256",
+            "run context changed during aggregation",
+        )
+    for index, (path, result) in enumerate(zip(resolved_result_paths, results, strict=True)):
+        if sha256(path.read_bytes()).hexdigest() != result.sha256:
+            raise BundleValidationError(
+                f"$.per_domain_results[{index}].result_sha256",
+                "domain result changed during aggregation",
+            )
+    return write_contract_json(aggregate, output_path)
+
+
+def _trace_link(
+    *,
+    domain_id: str,
+    verified_index_sha256: str,
+    link: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "domain_id": domain_id,
+        "evidence_index_sha256": verified_index_sha256,
+        "segment_index": link["segment_index"],
+        "uri": link["uri"],
+        "media_type": link["media_type"],
+        "format": "otlp-jsonl",
+        "signal": "traces",
+        "sha256": link["sha256"],
+        "size_bytes": link["size_bytes"],
+    }
+
+
+def _violation_document(violation: ChainViolation) -> dict[str, Any]:
+    return {
+        "code": violation.code,
+        **({"channel_id": violation.channel_id} if violation.channel_id else {}),
+        "message": violation.message,
+    }
+
+
+def _span_reference(span: Any) -> dict[str, Any]:
+    if span.message_id is None:
+        raise BundleValidationError(
+            "$.causal_chains.hops",
+            "a verified causal hop must carry messaging.message.id",
+        )
+    return {
+        "domain_id": span.domain_id,
+        "trace_id": span.trace_id,
+        "span_id": span.span_id,
+        "message_id": span.message_id,
+    }
+
+
+def _hop_document(hop: CausalHop) -> dict[str, Any]:
+    return {
+        "channel_id": hop.channel_id,
+        "relationship": hop.relationship,
+        "producer": _span_reference(hop.producer),
+        "consumer": _span_reference(hop.consumer),
+        "status": "passed",
+        "violations": [],
+    }
+
+
+def _cross_domain_status(
+    per_domain_status: str,
+    channel_statuses: set[str],
+    chain_statuses: set[str],
+) -> str:
+    statuses = {per_domain_status, *chain_statuses, *channel_statuses}
+    if "error" in statuses:
+        return "error"
+    if "failed" in statuses:
+        return "failed"
+    if statuses & {"incomplete", "cancelled"}:
+        return "incomplete"
+    return "passed"
+
+
+def evaluate_trace_aggregate(
+    *,
+    run_context_path: str | Path,
+    base_aggregate_path: str | Path,
+    causal_chain_paths: Sequence[str | Path],
+    channel_contract_paths: Sequence[str | Path],
+    trace_paths: Mapping[str, str | Path],
+    evidence_index_paths: Mapping[str, str | Path],
+    observation_output_dir: str | Path,
+    output_path: str | Path,
+    aggregate_id: str | None = None,
+    generated_at: datetime | None = None,
+) -> Path:
+    """Evaluate channel delivery and cross-domain causality over a v1 aggregate."""
+
+    evaluated_at = generated_at or datetime.now(UTC)
+    context = load_document(run_context_path, expected_schemas={"acceptance-run.v1"})
+    base = load_document(base_aggregate_path, expected_schemas={"acceptance-aggregate.v1"})
+    if not causal_chain_paths:
+        raise BundleValidationError(
+            "$.causal_chain_contracts",
+            "at least one causal-chain contract is required",
+        )
+    chain_contracts = [
+        load_document(path, expected_schemas={"causal-chain.v1"}) for path in causal_chain_paths
+    ]
+    chain_ids = [str(item.data["chain_id"]) for item in chain_contracts]
+    if len(chain_ids) != len(set(chain_ids)):
+        raise BundleValidationError(
+            "$.causal_chain_contracts",
+            "chain_id values must be unique",
+        )
+    if base.data["run_id"] != context.data["run_id"]:
+        raise BundleValidationError("$.run_id", "base aggregate belongs to another run")
+    if base.data["acceptance_run_sha256"] != context.sha256:
+        raise BundleValidationError(
+            "$.acceptance_run_sha256",
+            "base aggregate identifies another run context",
+        )
+
+    expected_domains = tuple(str(item["domain_id"]) for item in context.data["domains"])
+    expected_domain_set = set(expected_domains)
+    if set(trace_paths) != expected_domain_set:
+        raise BundleValidationError(
+            "$.trace_evidence",
+            "trace mapping must contain every run domain exactly once",
+        )
+    if set(evidence_index_paths) != expected_domain_set:
+        raise BundleValidationError(
+            "$.trace_evidence",
+            "evidence-index mapping must contain every run domain exactly once",
+        )
+
+    channel_contracts = [
+        load_document(path, expected_schemas={"zenoh-channel.v1"})
+        for path in channel_contract_paths
+    ]
+    channel_ids = [str(item.data["channel_id"]) for item in channel_contracts]
+    if len(channel_ids) != len(set(channel_ids)):
+        raise BundleValidationError(
+            "$.channel_contracts",
+            "channel_id values must be unique",
+        )
+    channel_by_id = {str(item.data["channel_id"]): item for item in channel_contracts}
+    chain_channels: dict[str, list[Any]] = {}
+    referenced_channel_ids: set[str] = set()
+    for chain_contract in chain_contracts:
+        ordered_contracts: list[Any] = []
+        for reference in chain_contract.data["channel_contracts"]:
+            channel_id = str(reference["channel_id"])
+            contract = channel_by_id.get(channel_id)
+            if contract is None or contract.sha256 != reference["sha256"]:
+                raise BundleValidationError(
+                    f"$.causal_chain_contracts.{chain_contract.data['chain_id']}",
+                    "referenced channel contract is absent or has another digest",
+                )
+            ordered_contracts.append(contract)
+            referenced_channel_ids.add(channel_id)
+        touched_domains = {
+            str(contract.data[endpoint]["domain_id"])
+            for contract in ordered_contracts
+            for endpoint in ("source", "destination")
+        }
+        required_domains = {
+            str(domain_id) for domain_id in chain_contract.data["required_domain_ids"]
+        }
+        if required_domains != touched_domains:
+            raise BundleValidationError(
+                f"$.causal_chain_contracts.{chain_contract.data['chain_id']}.required_domain_ids",
+                "must equal the domains touched by the referenced channels",
+            )
+        chain_channels[str(chain_contract.data["chain_id"])] = ordered_contracts
+    if referenced_channel_ids != set(channel_by_id):
+        raise BundleValidationError(
+            "$.channel_contracts",
+            "every supplied channel contract must belong to a causal chain",
+        )
+    for contract in channel_contracts:
+        contract_domains = {
+            str(contract.data["source"]["domain_id"]),
+            str(contract.data["destination"]["domain_id"]),
+        }
+        if not contract_domains <= expected_domain_set:
+            raise BundleValidationError(
+                f"$.channel_contracts.{contract.data['channel_id']}",
+                "channel references a domain outside the acceptance run",
+            )
+    all_contract_domains = {
+        str(contract.data[endpoint]["domain_id"])
+        for contract in channel_contracts
+        for endpoint in ("source", "destination")
+    }
+    if all_contract_domains != expected_domain_set:
+        raise BundleValidationError(
+            "$.channel_contracts",
+            "causal chains must collectively traverse every acceptance-run domain",
+        )
+
+    trace_evidence: list[dict[str, Any]] = []
+    spans_by_domain = {}
+    for domain_id in sorted(expected_domains):
+        verified = load_evidence_index(
+            evidence_index_paths[domain_id],
+            expected_run_id=str(context.data["run_id"]),
+        )
+        trace_path = Path(trace_paths[domain_id]).expanduser().resolve()
+        link = verified.local_files.get(trace_path)
+        if link is None or link["media_type"] != "application/x-ndjson":
+            raise BundleValidationError(
+                f"$.trace_evidence.{domain_id}",
+                "trace file must be verified local application/x-ndjson evidence",
+            )
+        trace_evidence.append(
+            _trace_link(
+                domain_id=domain_id,
+                verified_index_sha256=verified.index.sha256,
+                link=link,
+            )
+        )
+        spans_by_domain[domain_id] = load_otlp_json_traces(
+            trace_path,
+            expected_run_id=str(context.data["run_id"]),
+            expected_domain_id=domain_id,
+            expected_sha256=str(link["sha256"]),
+        )
+    validate_trace_set(spans_by_domain)
+
+    observation_dir = Path(observation_output_dir).expanduser().resolve()
+    observation_dir.mkdir(parents=True, exist_ok=True)
+    observation_references: list[dict[str, Any]] = []
+    observation_statuses: set[str] = set()
+    for contract in sorted(
+        channel_contracts,
+        key=lambda item: str(item.data["channel_id"]),
+    ):
+        channel_id = str(contract.data["channel_id"])
+        observation = evaluate_channel_delivery(contract.data, spans_by_domain)
+        if observation.started_at_ns:
+            started_at = datetime.fromtimestamp(
+                observation.started_at_ns / 1_000_000_000,
+                tz=UTC,
+            )
+            finished_at = datetime.fromtimestamp(
+                observation.finished_at_ns / 1_000_000_000,
+                tz=UTC,
+            )
+        else:
+            finished_at = evaluated_at
+            started_at = evaluated_at - timedelta(
+                seconds=float(contract.data["delivery"]["observation_window_sec"])
+            )
+        observation_document = {
+            "schema_version": "zenoh-channel-observation.v1",
+            "observation_id": f"observation-{uuid4()}",
+            "run_id": context.data["run_id"],
+            "channel_id": channel_id,
+            "channel_contract_sha256": contract.sha256,
+            "started_at": _iso8601(started_at),
+            "finished_at": _iso8601(finished_at),
+            "sent_count": observation.sent_count,
+            "received_count": observation.received_count,
+            "lost_count": observation.lost_count,
+            "duplicate_count": observation.duplicate_count,
+            "out_of_order_count": observation.out_of_order_count,
+            "loss_ratio": observation.loss_ratio,
+            "max_message_age_ms": observation.max_message_age_ms,
+            "status": observation.status,
+            "violations": [_violation_document(violation) for violation in observation.violations],
+        }
+        observation_path = write_contract_json(
+            observation_document,
+            observation_dir / f"{channel_id}.json",
+        )
+        observation_digest = sha256(observation_path.read_bytes()).hexdigest()
+        observation_references.append(
+            {
+                "channel_id": channel_id,
+                "observation_id": observation_document["observation_id"],
+                "sha256": observation_digest,
+                "status": observation.status,
+            }
+        )
+        observation_statuses.add(observation.status)
+
+    chain_documents: list[dict[str, Any]] = []
+    chain_statuses: set[str] = set()
+    for chain_contract in sorted(
+        chain_contracts,
+        key=lambda item: str(item.data["chain_id"]),
+    ):
+        chain = evaluate_causal_chain(
+            chain_contract.data,
+            [item.data for item in chain_channels[str(chain_contract.data["chain_id"])]],
+            spans_by_domain,
+        )
+        chain_document: dict[str, Any] = {
+            "chain_id": chain_contract.data["chain_id"],
+            "expected_contract_sha256": chain_contract.sha256,
+            "channel_ids": list(chain.channel_ids),
+            "status": chain.status,
+            "hops": [_hop_document(hop) for hop in chain.hops],
+            "violations": [_violation_document(violation) for violation in chain.violations],
+        }
+        if chain.root_trace_id is not None:
+            chain_document["root_trace_id"] = chain.root_trace_id
+        if chain.trace_ids:
+            chain_document["trace_ids"] = list(chain.trace_ids)
+        chain_documents.append(chain_document)
+        chain_statuses.add(chain.status)
+
+    per_domain_status = str(base.data["per_domain_aggregate"])
+    cross_status = _cross_domain_status(
+        per_domain_status,
+        observation_statuses,
+        chain_statuses,
+    )
+    aggregate: dict[str, Any] = {
+        "schema_version": "acceptance-aggregate.v2",
+        "aggregate_id": aggregate_id or f"aggregate-{uuid4()}",
+        "run_id": base.data["run_id"],
+        "acceptance_run_sha256": base.data["acceptance_run_sha256"],
+        "base_aggregate_sha256": base.sha256,
+        "generated_at": _iso8601(evaluated_at),
+        "per_domain_results": [dict(item) for item in base.data["per_domain_results"]],
+        "per_domain_aggregate": per_domain_status,
+        "evaluator": {
+            "implementation": "robotics-acceptance-harness",
+            "version": __version__,
+        },
+        "trace_evidence": trace_evidence,
+        "causal_chain_contracts": [
+            {
+                "chain_id": chain_contract.data["chain_id"],
+                "sha256": chain_contract.sha256,
+            }
+            for chain_contract in sorted(
+                chain_contracts,
+                key=lambda item: str(item.data["chain_id"]),
+            )
+        ],
+        "channel_contracts": [
+            {
+                "channel_id": contract.data["channel_id"],
+                "source_domain_id": contract.data["source"]["domain_id"],
+                "destination_domain_id": contract.data["destination"]["domain_id"],
+                "sha256": contract.sha256,
+            }
+            for contract in sorted(
+                channel_contracts,
+                key=lambda item: str(item.data["channel_id"]),
+            )
+        ],
+        "channel_observations": observation_references,
+        "causal_chains": chain_documents,
+        "cross_domain_e2e": {
+            "status": cross_status,
+            "evaluated_at": _iso8601(evaluated_at),
+            "chain_count": len(chain_documents),
+            "passed_chain_count": sum(item["status"] == "passed" for item in chain_documents),
+            "failed_chain_count": sum(item["status"] == "failed" for item in chain_documents),
+            "incomplete_chain_count": sum(
+                item["status"] == "incomplete" for item in chain_documents
+            ),
+            "error_chain_count": sum(item["status"] == "error" for item in chain_documents),
+        },
+    }
+    base_path = Path(base_aggregate_path).expanduser().resolve()
+    if sha256(base_path.read_bytes()).hexdigest() != base.sha256:
+        raise BundleValidationError(
+            "$.base_aggregate_sha256",
+            "base aggregate changed during trace evaluation",
+        )
+    return write_contract_json(aggregate, output_path)
+
+
+__all__ = ["aggregate_results", "evaluate_trace_aggregate"]

@@ -7,27 +7,47 @@ on:
       - "v*"
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 defaults:
   run:
     shell: bash
+    working-directory: robotics-acceptance-harness
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
+          path: robotics-acceptance-harness
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          repository: mmkolpakov/robotics-runtime-contracts
+          ref: 5e17b27db70d4ddb6355f58c156114f0e3b2a5f0
+          persist-credentials: false
+          path: robotics-runtime-contracts
+      - name: Verify tag belongs to main
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin \
+            refs/heads/main:refs/remotes/origin/main
+          tagged_commit="$(git rev-parse HEAD^{commit})"
+          main_commit="$(git rev-parse refs/remotes/origin/main^{commit})"
+          if ! git merge-base --is-ancestor "$tagged_commit" "$main_commit"; then
+            echo "::error::Tagged commit $tagged_commit is not reachable from origin/main"
+            exit 1
+          fi
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
         with:
           version: "0.11.28"
           enable-cache: true
-          cache-dependency-glob: uv.lock
+          cache-dependency-glob: robotics-acceptance-harness/uv.lock
       - name: Synchronize locked environment
         run: uv sync --locked --all-groups
       - name: Validate release source
@@ -42,15 +62,71 @@ jobs:
       - name: Run tests
         run: |
           uv run pytest \
+            -p robotics_acceptance_harness.plugin \
             --robotics-scenario tests/fixtures/simulation/scenario.yaml \
             --robotics-runtime tests/fixtures/simulation/runtime.yaml
       - name: Build distributions
-        run: uv build --no-sources --out-dir artifacts/dist
+        run: uv build --no-sources --out-dir dist
+      - name: Verify built wheel
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          uv run --isolated --no-project \
+            --with ../robotics-runtime-contracts \
+            --with "$wheel" \
+            robotics-acceptance --version
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: python-distributions
+          path: robotics-acceptance-harness/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/robotics-acceptance-harness
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v8.0.0
+        with:
+          name: python-distributions
+          path: robotics-acceptance-harness/dist/
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247  # v1.14.1
+        with:
+          packages-dir: robotics-acceptance-harness/dist/
+
+  github-release:
+    needs:
+      - build
+      - publish-pypi
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v8.0.0
+        with:
+          name: python-distributions
+          path: robotics-acceptance-harness/dist/
       - name: Attest distributions
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763  # v4.1.1
         with:
-          subject-path: artifacts/dist/*
+          subject-path: robotics-acceptance-harness/dist/*
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" artifacts/dist/* --generate-notes --verify-tag
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag

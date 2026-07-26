@@ -8,13 +8,19 @@ import yaml
 FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
 
 
-def run_isolated(pytester: pytest.Pytester, *args: str) -> pytest.RunResult:
+def run_isolated(
+    pytester: pytest.Pytester,
+    *args: str,
+    load_plugin: bool = True,
+) -> pytest.RunResult:
     config = pytester.makeini("[pytest]\n")
+    plugin_args = ("-p", "robotics_acceptance_harness.plugin") if load_plugin else ()
     return pytester.runpytest(
         "-c",
         str(config),
         "--rootdir",
         str(pytester.path),
+        *plugin_args,
         *args,
     )
 
@@ -42,6 +48,14 @@ def run_with_simulation(pytester: pytest.Pytester) -> pytest.RunResult:
 
 def test_simulation_scenario_runs_tests(pytester: pytest.Pytester) -> None:
     result = run_with_simulation(pytester)
+    result.assert_outcomes(passed=1)
+
+
+def test_installed_package_does_not_activate_pytest_plugin(pytester: pytest.Pytester) -> None:
+    test_file = pytester.makepyfile("def test_plain_project():\n    assert True\n")
+
+    result = run_isolated(pytester, test_file.name, load_plugin=False)
+
     result.assert_outcomes(passed=1)
 
 
@@ -148,3 +162,4 @@ def test_help_has_no_physical_execution_bypass(pytester: pytest.Pytester) -> Non
     assert result.ret == pytest.ExitCode.OK
     result.stdout.fnmatch_lines(["*--robotics-scenario=PATH*"])
     assert "allow-physical" not in result.stdout.str()
+    assert "--robotics-permit" not in result.stdout.str()
