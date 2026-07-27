@@ -61,9 +61,9 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts>=0.7.0,<0.8` |
+| Contracts | `robotics-runtime-contracts>=0.8.0,<0.9` |
 | Scenarios | `acceptance-scenario.v1`, `acceptance-scenario.v2` |
-| Results | `acceptance-result.v1`, `acceptance-result.v2` |
+| Results | Reads `acceptance-result.v1` through `v3`; writes run-scoped `v3` |
 | Aggregates | `acceptance-aggregate.v1`, `acceptance-aggregate.v2` |
 | ROS observation | ROS 2 Jazzy with `rclpy` and declared message packages |
 | Metrics | Newline-delimited OTLP JSON from the Collector file exporter |

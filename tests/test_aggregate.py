@@ -19,7 +19,7 @@ from robotics_acceptance_harness.forbidden_graph import ForbiddenGraphObservatio
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import GraphSnapshot, ReadinessResult
 from robotics_acceptance_harness.result import (
-    build_acceptance_result_v2,
+    build_acceptance_result_v3,
     write_result_json,
 )
 from robotics_acceptance_harness.time_authority import TimeAuthorityObservation
@@ -78,7 +78,7 @@ def result(
                 {
                     "uri": evidence_payload_path.resolve().as_uri(),
                     "local_path": local_path,
-                    "media_type": "application/json",
+                    "media_type": "application/x-ndjson",
                     "sha256": evidence_digest,
                     "size_bytes": len(evidence_payload),
                     "retention_class": "pull-request-7d",
@@ -89,7 +89,7 @@ def result(
             ],
         },
     )
-    document = build_acceptance_result_v2(
+    document = build_acceptance_result_v3(
         result_id=f"result-01234567-89ab-4def-8123-456789abcde{suffix}",
         run_id=RUN_ID,
         domain_id=domain_id,
@@ -127,6 +127,7 @@ def result(
         evidence_index=load_evidence_index(evidence_path),
         forbidden_graph=ForbiddenGraphObservation((), (), (), ()),
     )
+    assert document["schema_version"] == "acceptance-result.v3"
     return write_result_json(document, tmp_path / f"result-{suffix}.json")
 
 
@@ -430,6 +431,23 @@ def test_aggregate_requires_and_emits_every_registered_domain(tmp_path: Path) ->
         "control-domain",
     ]
     assert aggregate["cross_domain_e2e"]["status"] == "unevaluated"
+
+
+def test_aggregate_reads_legacy_v2_result_during_migration(tmp_path: Path) -> None:
+    context_path = run_context(tmp_path)
+    legacy_path = result(tmp_path, "camera-domain", "0")
+    legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+    legacy["schema_version"] = "acceptance-result.v2"
+    legacy["evidence"][0]["media_type"] = "application/json"
+    write_result_json(legacy, legacy_path)
+
+    output = aggregate_results(
+        run_context_path=context_path,
+        result_paths=[legacy_path, result(tmp_path, "control-domain", "1")],
+        output_path=tmp_path / "aggregate.json",
+    )
+
+    assert load_document(output).data["per_domain_aggregate"] == "passed"
 
 
 def test_aggregate_fails_when_registered_domain_has_no_result(tmp_path: Path) -> None:

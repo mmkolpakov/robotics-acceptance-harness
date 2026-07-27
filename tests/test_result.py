@@ -22,7 +22,7 @@ from robotics_acceptance_harness.readiness import (
 )
 from robotics_acceptance_harness.result import (
     build_acceptance_result,
-    build_acceptance_result_v2,
+    build_acceptance_result_v3,
     write_junit_xml,
     write_result_json,
 )
@@ -159,7 +159,7 @@ def test_v2_result_rejects_evidence_from_another_run(tmp_path: Path) -> None:
     inputs.pop("result_id")
 
     with pytest.raises(ValueError, match="evidence index run_id"):
-        build_acceptance_result_v2(
+        build_acceptance_result_v3(
             result_id="result-00000000-0000-4000-8000-000000000001",
             run_id="run-00000000-0000-4000-8000-000000000002",
             domain_id="camera-domain",

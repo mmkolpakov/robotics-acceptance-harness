@@ -36,7 +36,7 @@ from robotics_acceptance_harness.readiness import (
 )
 from robotics_acceptance_harness.result import (
     build_acceptance_result,
-    build_acceptance_result_v2,
+    build_acceptance_result_v3,
     write_junit_xml,
     write_result_json,
 )
@@ -411,7 +411,7 @@ def run_verification(
             window_start_ns=measurement_started_ns,
             window_end_ns=measurement_finished_ns,
         )
-        result = build_acceptance_result_v2(
+        result = build_acceptance_result_v3(
             result_id=result_id,
             run_id=run_id,
             domain_id=domain_id,
