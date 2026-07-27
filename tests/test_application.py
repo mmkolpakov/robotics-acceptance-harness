@@ -172,7 +172,11 @@ def _write_evidence_index(path: Path, metrics_path: Path, *, run_id: str) -> Non
     )
 
 
-def _v2_bundle(tmp_path: Path):
+def _run_scoped_bundle(
+    tmp_path: Path,
+    *,
+    schema_version: str = "acceptance-scenario.v2",
+):
     scenario = yaml.safe_load((FIXTURES / "scenario.yaml").read_text(encoding="utf-8"))
     scenario["timeouts"]["stable_for_sec"] = 0
     scenario["timeouts"]["execution_sec"] = 0.2
@@ -184,7 +188,8 @@ def _v2_bundle(tmp_path: Path):
         max_clock_offset_p95_ms=2,
         max_clock_offset_ms=5,
     )
-    scenario_path = tmp_path / "scenario-v2.yaml"
+    migrated["schema_version"] = schema_version
+    scenario_path = tmp_path / f"{schema_version}.yaml"
     scenario_path.write_text(
         yaml.safe_dump(migrated, sort_keys=False),
         encoding="utf-8",
@@ -417,14 +422,21 @@ def test_verification_observes_without_starting_runtime(tmp_path: Path) -> None:
     assert observer.closed
 
 
-def test_v2_verification_requires_domain_and_run_context(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "schema_version",
+    ["acceptance-scenario.v2", "acceptance-scenario.v3"],
+)
+def test_run_scoped_verification_requires_domain_and_run_context(
+    tmp_path: Path,
+    schema_version: str,
+) -> None:
     with pytest.raises(
         VerificationError,
-        match="v2 verification requires domain_id and run_context_path",
+        match="run-scoped verification requires domain_id and run_context_path",
     ):
         run_verification(
             run_id=SIMULATION_RUN_ID,
-            bundle=_v2_bundle(tmp_path),
+            bundle=_run_scoped_bundle(tmp_path, schema_version=schema_version),
             evidence_index_path=tmp_path / "evidence-index.yaml",
             otel_metrics_path=tmp_path / "metrics.otlp.json",
             output_dir=tmp_path / "output",
@@ -432,7 +444,7 @@ def test_v2_verification_requires_domain_and_run_context(tmp_path: Path) -> None
 
 
 def test_time_authority_rejects_samples_outside_measurement_window(tmp_path: Path) -> None:
-    bundle = _v2_bundle(tmp_path)
+    bundle = _run_scoped_bundle(tmp_path)
     metrics_path = tmp_path / "metrics.otlp.json"
     _write_v2_metrics(metrics_path, timestamps=list(range(100, 130)))
     evidence_path = tmp_path / "evidence-index-v2.yaml"
@@ -470,7 +482,7 @@ def test_time_authority_rejects_samples_outside_measurement_window(tmp_path: Pat
 
 
 def test_v2_verification_ignores_metrics_from_another_run(tmp_path: Path) -> None:
-    bundle = _v2_bundle(tmp_path)
+    bundle = _run_scoped_bundle(tmp_path)
     metrics_path = tmp_path / "metrics.otlp.json"
     _write_v2_metrics(
         metrics_path,

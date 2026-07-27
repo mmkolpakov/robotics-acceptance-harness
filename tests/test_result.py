@@ -16,6 +16,7 @@ from robotics_acceptance_harness.evidence import load_evidence_index
 from robotics_acceptance_harness.forbidden_graph import ForbiddenGraphObservation
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import (
+    EndpointObservation,
     GraphSnapshot,
     ReadinessResult,
     TopicObservation,
@@ -69,6 +70,31 @@ def test_build_result_validates_no_inference_execution() -> None:
     validate_document(result)
     assert result["status"] == "passed"
     assert result["workload"] == {"kind": "none"}
+
+
+def test_result_omits_endpoints_that_lost_their_type() -> None:
+    snapshot = GraphSnapshot(
+        observed_at_ns=2_000_000_000,
+        topics={
+            "/clock": TopicObservation(
+                types=(),
+                publishers=1,
+                subscribers=1,
+                first_message_at_ns=1_000_000_000,
+            )
+        },
+        services={"/reset": EndpointObservation(types=(), servers=1)},
+        actions={"/move": EndpointObservation(types=(), servers=1, clients=1)},
+    )
+    inputs = result_inputs()
+    inputs["readiness"] = ReadinessResult(snapshot, 1_000_000_000, 1.0)
+
+    result = build_acceptance_result(assertions=(), **inputs)
+
+    assert result["observed_ros_graph"]["topics"] == []
+    assert result["observed_ros_graph"]["services"] == []
+    assert result["observed_ros_graph"]["actions"] == []
+    validate_document(result)
 
 
 def test_json_and_junit_outputs_share_the_same_status(tmp_path: Path) -> None:

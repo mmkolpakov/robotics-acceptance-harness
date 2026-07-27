@@ -528,7 +528,7 @@ wheels = [
 
 [[package]]
 name = "robotics-acceptance-harness"
-version = "0.9.1"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "junitparser" },
@@ -559,7 +559,7 @@ requires-dist = [
     { name = "junitparser", specifier = ">=5.0.1,<6" },
     { name = "opentelemetry-proto", specifier = "==1.43.0" },
     { name = "pytest", marker = "extra == 'pytest'", specifier = ">=8,<10" },
-    { name = "pyyaml", specifier = ">=6.0.2,<7" },
+    { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "robotics-runtime-contracts", editable = "../robotics-runtime-contracts" },
 ]
 provides-extras = ["pytest"]
@@ -578,14 +578,18 @@ dev = [
 
 [[package]]
 name = "robotics-runtime-contracts"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "../robotics-runtime-contracts" }
 dependencies = [
     { name = "jsonschema", extra = ["format-nongpl"] },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26,<5" }]
+requires-dist = [
+    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26,<5" },
+    { name = "pyyaml", specifier = ">=6.0.3,<7" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -593,9 +597,9 @@ dev = [
     { name = "mypy", specifier = "==2.3.0" },
     { name = "pre-commit", specifier = "==4.6.0" },
     { name = "pytest", specifier = "==9.1.1" },
-    { name = "pyyaml", specifier = ">=6.0.2,<7" },
     { name = "ruff", specifier = "==0.15.21" },
     { name = "types-jsonschema", specifier = "==4.26.0.20260518" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20260518" },
     { name = "yamllint", specifier = "==1.38.0" },
 ]
 

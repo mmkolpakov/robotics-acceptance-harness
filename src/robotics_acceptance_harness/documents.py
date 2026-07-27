@@ -274,6 +274,7 @@ def load_bundle(
         expected_schemas={
             "acceptance-scenario.v1",
             "acceptance-scenario.v2",
+            "acceptance-scenario.v3",
         },
         extension_schemas=extension_schemas,
     )
