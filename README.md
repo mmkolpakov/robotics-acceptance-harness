@@ -61,8 +61,8 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts>=0.8.0,<0.9` |
-| Scenarios | `acceptance-scenario.v1`, `acceptance-scenario.v2` |
+| Contracts | `robotics-runtime-contracts>=0.9.0,<0.10` |
+| Scenarios | `acceptance-scenario.v1` through `v3` |
 | Results | Reads `acceptance-result.v1` through `v3`; writes run-scoped `v3` |
 | Aggregates | `acceptance-aggregate.v1`, `acceptance-aggregate.v2` |
 | ROS observation | ROS 2 Jazzy with `rclpy` and declared message packages |
@@ -134,8 +134,8 @@ The OTLP file is accepted only when the finalized evidence index covers its
 exact path, media type, byte size, and SHA-256 digest.
 
 `--domain-id` and `--run-context` are required for
-`acceptance-scenario.v2`. A v1 scenario omits both options; `--run-id` remains
-required for every verification.
+`acceptance-scenario.v2` and `acceptance-scenario.v3`. A v1 scenario omits both
+options; `--run-id` remains required for every verification.
 
 ## Aggregate Results
 
@@ -165,7 +165,7 @@ channel contract.
 
 | Input | Required when | Contract |
 | --- | --- | --- |
-| Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v1` or `.v2` |
+| Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v1` through `.v3` |
 | Runtime manifest | `explain`, `verify`, pytest | `runtime-manifest.v1` |
 | Model manifest | Inference workload | `model-artifact-manifest.v1` |
 | Dataset manifest | MCAP playback | `dataset-manifest.v1` |
@@ -173,7 +173,7 @@ channel contract.
 | Verification record | HIL or real target | `execution-verification.v1` |
 | Evidence index | `verify` | `evidence-index.v1` or `.v2` |
 | Metrics | Metric assertions or physical observation | OTLP JSON |
-| Run context | v2 `verify`, `aggregate`, `trace-evaluate` | `acceptance-run.v1` |
+| Run context | v2/v3 `verify`, `aggregate`, `trace-evaluate` | `acceptance-run.v1` |
 
 Local domain extensions remain explicit and digest-pinned:
 

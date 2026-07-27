@@ -8,7 +8,7 @@ compatible. The documented CLI, exit codes, pytest fixtures, and emitted
 contract documents are public interfaces.
 
 The Python distribution declares
-`robotics-runtime-contracts>=0.8.0,<0.9`. Development uses the sibling checkout
+`robotics-runtime-contracts>=0.9.0,<0.10`. Development uses the sibling checkout
 through `tool.uv.sources`; published wheel metadata contains only the version
 specifier. `uv build --no-sources` is the packaging gate.
 
@@ -21,7 +21,7 @@ new document and never mutate stored evidence.
 
 | Input or output | Accepted versions |
 | --- | --- |
-| Scenario | `acceptance-scenario.v1`, `acceptance-scenario.v2` |
+| Scenario | `acceptance-scenario.v1`, `acceptance-scenario.v2`, `acceptance-scenario.v3` |
 | Runtime manifest | `runtime-manifest.v1` |
 | Result | `acceptance-result.v1`, `acceptance-result.v2`, `acceptance-result.v3` |
 | Run context | `acceptance-run.v1` |
@@ -37,8 +37,9 @@ both `v2` and `v3` during the migration window. Stored `v2` results remain
 valid and require no rewrite; new verification runs use `v3`.
 
 `verify` always requires `--run-id`. The `--domain-id` and `--run-context`
-options are required only for `acceptance-scenario.v2`; v1 verification remains
-valid without them.
+options are required for `acceptance-scenario.v2` and v3; v1 verification
+remains valid without them. Version 3 adds an explicit stepped-simulation skip
+budget.
 
 Channel delivery evaluation uses the first producer span as the start of the
 declared observation window. Spans crossing either boundary fail closed.

@@ -6,6 +6,8 @@ from typing import Any
 
 from robotics_acceptance_harness.readiness import ReadinessIssue
 
+LEGACY_MAX_SKIPPED_STEPS = 10_000
+
 
 class TimingValidationError(ValueError):
     """Raised when observed clock behavior violates the selected time policy."""
@@ -127,7 +129,11 @@ def evaluate_timing(
             issues.append(ReadinessIssue("$.time_policy", "playback clock did not advance"))
     elif mode == "simulation_stepped":
         step_ns = round(float(time_policy["step_size_sec"]) * 1_000_000_000)
-        max_skipped_steps = int(time_policy.get("max_skipped_steps", 10_000))
+        max_skipped_steps = (
+            int(time_policy["max_skipped_steps"])
+            if "max_skipped_steps" in time_policy
+            else LEGACY_MAX_SKIPPED_STEPS
+        )
         transitions = [
             current
             for previous, current in zip(samples, samples[1:], strict=False)

@@ -45,12 +45,12 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--domain-id",
         metavar="DOMAIN_ID",
-        help="Required for acceptance-scenario.v2; omitted for v1.",
+        help="Required for acceptance-scenario.v2/v3; omitted for v1.",
     )
     verify.add_argument(
         "--run-context",
         metavar="PATH",
-        help="Required for acceptance-scenario.v2; omitted for v1.",
+        help="Required for acceptance-scenario.v2/v3; omitted for v1.",
     )
     verify.add_argument("--evidence-index", required=True, metavar="PATH")
     verify.add_argument(

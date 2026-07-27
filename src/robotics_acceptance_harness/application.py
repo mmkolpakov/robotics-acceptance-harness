@@ -72,7 +72,10 @@ def _utc_now() -> datetime:
 
 
 def _unevaluated_declarations(scenario: Mapping[str, Any]) -> list[str]:
-    if scenario["schema_version"] == "acceptance-scenario.v2":
+    if scenario["schema_version"] in {
+        "acceptance-scenario.v2",
+        "acceptance-scenario.v3",
+    }:
         return []
     return [
         f"$.{policy_name}.{field}"
@@ -227,13 +230,18 @@ def run_verification(
         raise VerificationError("physical observation requires --otel-metrics evidence")
     if physical and metric_samples:
         raise VerificationError("physical observation requires file-backed OTLP evidence")
-    is_v2 = bundle.scenario.schema_version == "acceptance-scenario.v2"
+    is_run_scoped = bundle.scenario.schema_version in {
+        "acceptance-scenario.v2",
+        "acceptance-scenario.v3",
+    }
     run_context = None
-    if is_v2:
+    if is_run_scoped:
         if domain_id is None or run_context_path is None:
-            raise VerificationError("v2 verification requires domain_id and run_context_path")
+            raise VerificationError(
+                "run-scoped verification requires domain_id and run_context_path"
+            )
         if otel_metrics_path is None:
-            raise VerificationError("v2 verification requires --otel-metrics evidence")
+            raise VerificationError("run-scoped verification requires --otel-metrics evidence")
         run_context = load_run_context(
             run_context_path,
             run_id=run_id,
@@ -241,7 +249,7 @@ def run_verification(
             scenario_id=str(scenario["scenario_id"]),
             scenario_sha256=bundle.scenario.sha256,
         )
-    result_id = f"result-{uuid4()}" if is_v2 else run_id
+    result_id = f"result-{uuid4()}" if is_run_scoped else run_id
     observe_clock = execution["time_mode"] != "hardware_realtime"
     forbidden_monitor = ForbiddenGraphMonitor(scenario["forbidden_ros_graph"])
     observer = observer_factory(
@@ -315,7 +323,7 @@ def run_verification(
             metrics_path,
             expected_sha256=metrics_evidence_sha256,
         )
-        if is_v2:
+        if is_run_scoped:
             assert domain_id is not None
             metric_samples = _run_domain_metrics(
                 metric_samples,
@@ -362,7 +370,7 @@ def run_verification(
                 unit="1",
                 message=str(error),
             )
-    if is_v2:
+    if is_run_scoped:
         assertions = list(
             evaluate_metric_assertions(
                 scenario["assertions"],
@@ -373,7 +381,7 @@ def run_verification(
         )
     else:
         assertions = list(evaluate_metric_assertions(scenario["assertions"], metric_samples))
-    if is_v2:
+    if is_run_scoped:
         assert domain_id is not None
         assertions.extend(
             evaluate_data_plane_policy(
@@ -398,7 +406,7 @@ def run_verification(
     monotonic_duration_sec = (
         measurement_finished_monotonic_ns - measurement_started_monotonic_ns
     ) / 1_000_000_000
-    if is_v2:
+    if is_run_scoped:
         assert domain_id is not None
         assert run_context is not None
         assert metrics_evidence_sha256 is not None

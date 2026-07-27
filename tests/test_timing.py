@@ -67,6 +67,21 @@ def test_stepped_timing_ignores_repeated_clock_publications() -> None:
     assert result.monotonic
 
 
+def test_legacy_stepped_policy_uses_fixed_compatibility_budget() -> None:
+    samples = [
+        ClockSample(0, 0),
+        ClockSample(1_000_000, 2_000_000),
+    ]
+
+    result = evaluate_timing(
+        {"time_mode": "simulation_stepped"},
+        {"step_size_sec": 0.001},
+        samples,
+    )
+
+    assert result.monotonic
+
+
 def test_stepped_timing_rejects_clock_that_only_repeats() -> None:
     samples = [
         ClockSample(0, 1_000_000),
