@@ -128,9 +128,19 @@ def evaluate_timing(
     elif mode == "simulation_stepped":
         step_ns = round(float(time_policy["step_size_sec"]) * 1_000_000_000)
         max_skipped_steps = int(time_policy.get("max_skipped_steps", 10_000))
+        transitions = [
+            current
+            for previous, current in zip(samples, samples[1:], strict=False)
+            if current.source_time_ns != previous.source_time_ns
+        ]
+        transition_sources = [samples[0], *transitions]
         deltas = [
             current.source_time_ns - previous.source_time_ns
-            for previous, current in zip(samples, samples[1:], strict=False)
+            for previous, current in zip(
+                transition_sources,
+                transition_sources[1:],
+                strict=False,
+            )
         ]
         if not deltas or samples[-1].source_time_ns <= samples[0].source_time_ns:
             issues.append(ReadinessIssue("$.time_policy", "stepped clock did not advance"))

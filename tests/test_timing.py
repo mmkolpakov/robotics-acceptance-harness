@@ -49,6 +49,38 @@ def test_stepped_timing_accepts_declared_multiples() -> None:
     assert result.monotonic
 
 
+def test_stepped_timing_ignores_repeated_clock_publications() -> None:
+    samples = [
+        ClockSample(0, 0),
+        ClockSample(100_000, 0),
+        ClockSample(1_000_000, 1_000_000),
+        ClockSample(1_100_000, 1_000_000),
+        ClockSample(2_000_000, 2_000_000),
+    ]
+
+    result = evaluate_timing(
+        {"time_mode": "simulation_stepped"},
+        {"step_size_sec": 0.001, "max_skipped_steps": 0},
+        samples,
+    )
+
+    assert result.monotonic
+
+
+def test_stepped_timing_rejects_clock_that_only_repeats() -> None:
+    samples = [
+        ClockSample(0, 1_000_000),
+        ClockSample(1_000_000, 1_000_000),
+    ]
+
+    with pytest.raises(TimingValidationError, match="stepped clock did not advance"):
+        evaluate_timing(
+            {"time_mode": "simulation_stepped"},
+            {"step_size_sec": 0.001},
+            samples,
+        )
+
+
 def test_stepped_timing_rejects_large_jump() -> None:
     samples = [
         ClockSample(0, 0),
