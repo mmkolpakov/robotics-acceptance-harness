@@ -8,7 +8,7 @@ compatible. The documented CLI, exit codes, pytest fixtures, and emitted
 contract documents are public interfaces.
 
 The Python distribution declares
-`robotics-runtime-contracts>=0.7.0,<0.8`. Development uses the sibling checkout
+`robotics-runtime-contracts>=0.8.0,<0.9`. Development uses the sibling checkout
 through `tool.uv.sources`; published wheel metadata contains only the version
 specifier. `uv build --no-sources` is the packaging gate.
 
@@ -23,13 +23,18 @@ new document and never mutate stored evidence.
 | --- | --- |
 | Scenario | `acceptance-scenario.v1`, `acceptance-scenario.v2` |
 | Runtime manifest | `runtime-manifest.v1` |
-| Result | `acceptance-result.v1`, `acceptance-result.v2` |
+| Result | `acceptance-result.v1`, `acceptance-result.v2`, `acceptance-result.v3` |
 | Run context | `acceptance-run.v1` |
 | Aggregate | `acceptance-aggregate.v1`, `acceptance-aggregate.v2` |
 | Evidence index | `evidence-index.v1`, `evidence-index.v2` |
 
 Compatibility is checked per schema, not inferred from the package version.
 Unknown schema identifiers fail closed.
+
+Release `0.9.0` writes `acceptance-result.v3` for run-scoped verification so
+verified NDJSON trace segments remain attached to the verdict. Aggregation reads
+both `v2` and `v3` during the migration window. Stored `v2` results remain
+valid and require no rewrite; new verification runs use `v3`.
 
 `verify` always requires `--run-id`. The `--domain-id` and `--run-context`
 options are required only for `acceptance-scenario.v2`; v1 verification remains

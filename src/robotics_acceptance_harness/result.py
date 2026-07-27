@@ -131,7 +131,7 @@ def _hardware_clock_result(
     }
 
 
-def build_acceptance_result(
+def _build_acceptance_result(
     *,
     result_id: str,
     bundle: DocumentBundle,
@@ -149,7 +149,7 @@ def build_acceptance_result(
     hardware_timing: HardwareTimingObservation | None = None,
     hardware_timing_evidence_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Build and validate the canonical acceptance result."""
+    """Build the common acceptance-result fields."""
 
     if evidence_index is not None:
         if evidence:
@@ -229,11 +229,51 @@ def build_acceptance_result(
         result["model_manifest_sha256"] = bundle.model.sha256
     if bundle.dataset is not None:
         result["dataset_manifest_sha256"] = bundle.dataset.sha256
+    return result
+
+
+def build_acceptance_result(
+    *,
+    result_id: str,
+    bundle: DocumentBundle,
+    readiness: ReadinessResult,
+    timing: TimingObservation,
+    assertions: Sequence[AssertionEvaluation],
+    started_at: datetime,
+    finished_at: datetime,
+    monotonic_duration_sec: float,
+    shutdown: Mapping[str, bool],
+    evidence: Sequence[Mapping[str, Any]] = (),
+    evidence_index: VerifiedEvidence | None = None,
+    status: str | None = None,
+    forbidden_graph: ForbiddenGraphObservation,
+    hardware_timing: HardwareTimingObservation | None = None,
+    hardware_timing_evidence_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Build and validate a canonical acceptance-result.v1 document."""
+
+    result = _build_acceptance_result(
+        result_id=result_id,
+        bundle=bundle,
+        readiness=readiness,
+        timing=timing,
+        assertions=assertions,
+        started_at=started_at,
+        finished_at=finished_at,
+        monotonic_duration_sec=monotonic_duration_sec,
+        shutdown=shutdown,
+        evidence=evidence,
+        evidence_index=evidence_index,
+        status=status,
+        forbidden_graph=forbidden_graph,
+        hardware_timing=hardware_timing,
+        hardware_timing_evidence_sha256=hardware_timing_evidence_sha256,
+    )
     validate_document(result)
     return result
 
 
-def build_acceptance_result_v2(
+def build_acceptance_result_v3(
     *,
     result_id: str,
     run_id: str,
@@ -258,7 +298,7 @@ def build_acceptance_result_v2(
 
     if evidence_index.index.data["run_id"] != run_id:
         raise ValueError("evidence index run_id must equal result run_id")
-    result = build_acceptance_result(
+    result = _build_acceptance_result(
         result_id=result_id,
         bundle=bundle,
         readiness=readiness,
@@ -275,7 +315,7 @@ def build_acceptance_result_v2(
     )
     result.update(
         {
-            "schema_version": "acceptance-result.v2",
+            "schema_version": "acceptance-result.v3",
             "result_id": result_id,
             "run_id": run_id,
             "scenario_id": bundle.scenario.data["scenario_id"],
@@ -410,7 +450,7 @@ def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
 
 __all__ = [
     "build_acceptance_result",
-    "build_acceptance_result_v2",
+    "build_acceptance_result_v3",
     "write_contract_json",
     "write_junit_xml",
     "write_result_json",

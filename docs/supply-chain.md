@@ -65,7 +65,9 @@ values:
 Do not create a `PYPI_API_TOKEN` secret. Until the external publisher is
 registered, the PyPI job is expected to fail closed.
 
-Release `robotics-runtime-contracts` v0.7.0 first and verify that it is available
-from PyPI. Only then create and push the protected
-`robotics-acceptance-harness` v0.8.0 tag. The tag must equal `v` followed by the
+Release `robotics-runtime-contracts` v0.8.0 first and verify its GitHub Release
+wheel and build-provenance attestation. Foundation consumers pin that wheel by
+URL and SHA-256. PyPI promotion remains a separate fail-closed channel until
+the trusted publisher is registered. Only then create and push the protected
+`robotics-acceptance-harness` v0.9.0 tag. The tag must equal `v` followed by the
 installed harness package version.

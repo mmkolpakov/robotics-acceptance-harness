@@ -56,7 +56,10 @@ def aggregate_results(
 
     resolved_result_paths = [Path(path).expanduser().resolve() for path in result_paths]
     results = [
-        load_document(path, expected_schemas={"acceptance-result.v2"})
+        load_document(
+            path,
+            expected_schemas={"acceptance-result.v2", "acceptance-result.v3"},
+        )
         for path in resolved_result_paths
     ]
     expected_domains = {item["domain_id"] for item in context.data["domains"]}
