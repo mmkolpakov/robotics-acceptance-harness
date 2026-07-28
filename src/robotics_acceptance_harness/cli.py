@@ -7,7 +7,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from robotics_acceptance_harness import __version__
-from robotics_acceptance_harness.aggregate import aggregate_results, evaluate_trace_aggregate
+from robotics_acceptance_harness.aggregate import (
+    aggregate_results,
+    evaluate_trace_aggregate,
+    evaluate_transport_qualification,
+)
 from robotics_acceptance_harness.application import explain_bundle, run_verification
 from robotics_acceptance_harness.documents import DocumentBundle, load_bundle
 
@@ -26,6 +30,39 @@ def _add_bundle_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="NAMESPACE=PATH",
         help="Digest-pinned local extension schema; may be repeated.",
     )
+
+
+def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--causal-chain",
+        action="append",
+        required=True,
+        metavar="PATH",
+        help="Causal-chain contract; may be repeated for branching flows.",
+    )
+    parser.add_argument(
+        "--trace",
+        action="append",
+        required=True,
+        metavar="DOMAIN=PATH",
+        help="Verified per-domain OTLP trace evidence; may be repeated.",
+    )
+    parser.add_argument(
+        "--evidence-index",
+        action="append",
+        required=True,
+        metavar="DOMAIN=PATH",
+        help="Finalized per-domain evidence index; may be repeated.",
+    )
+    parser.add_argument(
+        "--channel-contract",
+        action="append",
+        required=True,
+        metavar="PATH",
+        help="Zenoh channel contract in causal order; may be repeated.",
+    )
+    parser.add_argument("--observation-output", required=True, metavar="DIR")
+    parser.add_argument("--output", required=True, metavar="PATH")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -73,36 +110,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     trace_evaluate.add_argument("--run-context", required=True, metavar="PATH")
     trace_evaluate.add_argument("--base-aggregate", required=True, metavar="PATH")
-    trace_evaluate.add_argument(
-        "--causal-chain",
-        action="append",
-        required=True,
-        metavar="PATH",
-        help="Causal-chain contract; may be repeated for branching flows.",
+    _add_trace_arguments(trace_evaluate)
+
+    transport_evaluate = subparsers.add_parser(
+        "transport-evaluate",
+        help="Evaluate channel delivery and causal traces without a domain execution.",
     )
-    trace_evaluate.add_argument(
-        "--trace",
-        action="append",
-        required=True,
-        metavar="DOMAIN=PATH",
-        help="Verified per-domain OTLP trace evidence; may be repeated.",
-    )
-    trace_evaluate.add_argument(
-        "--evidence-index",
-        action="append",
-        required=True,
-        metavar="DOMAIN=PATH",
-        help="Finalized per-domain evidence index; may be repeated.",
-    )
-    trace_evaluate.add_argument(
-        "--channel-contract",
-        action="append",
-        required=True,
-        metavar="PATH",
-        help="Zenoh channel contract in causal order; may be repeated.",
-    )
-    trace_evaluate.add_argument("--observation-output", required=True, metavar="DIR")
-    trace_evaluate.add_argument("--output", required=True, metavar="PATH")
+    transport_evaluate.add_argument("--run-id", required=True, metavar="RUN_ID")
+    _add_trace_arguments(transport_evaluate)
 
     aggregate.add_argument("--output", required=True, metavar="PATH")
     return parser
@@ -180,6 +195,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             aggregate = json.loads(output.read_text(encoding="utf-8"))
             status = aggregate["cross_domain_e2e"]["status"]
             print(json.dumps({"aggregate": str(output), "status": status}, sort_keys=True))
+            return 0 if status == "passed" else 1
+
+        if arguments.command == "transport-evaluate":
+            output = evaluate_transport_qualification(
+                run_id=arguments.run_id,
+                causal_chain_paths=arguments.causal_chain,
+                channel_contract_paths=arguments.channel_contract,
+                trace_paths=_domain_paths(arguments.trace, "--trace"),
+                evidence_index_paths=_domain_paths(
+                    arguments.evidence_index,
+                    "--evidence-index",
+                ),
+                observation_output_dir=arguments.observation_output,
+                output_path=arguments.output,
+            )
+            result = json.loads(output.read_text(encoding="utf-8"))
+            status = result["verdict"]["status"]
+            print(
+                json.dumps(
+                    {"qualification": str(output), "status": status},
+                    sort_keys=True,
+                )
+            )
             return 0 if status == "passed" else 1
 
         bundle = _bundle(arguments)

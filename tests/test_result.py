@@ -24,6 +24,7 @@ from robotics_acceptance_harness.readiness import (
 from robotics_acceptance_harness.result import (
     build_acceptance_result,
     build_acceptance_result_v3,
+    build_acceptance_result_v4,
     write_junit_xml,
     write_result_json,
 )
@@ -191,12 +192,13 @@ def test_v2_result_rejects_evidence_from_another_run(tmp_path: Path) -> None:
             domain_id="camera-domain",
             time_authority=TimeAuthorityObservation(
                 source_id="simulation-clock",
+                measurement_kind="clock_offset",
                 sample_count=30,
                 window_start_ns=1,
                 window_end_ns=2,
-                p50_offset_ms=0,
-                p95_offset_ms=0,
-                max_offset_ms=0,
+                p50_ms=0,
+                p95_ms=0,
+                max_ms=0,
                 within_policy=True,
             ),
             time_authority_evidence_sha256="f" * 64,
@@ -205,3 +207,70 @@ def test_v2_result_rejects_evidence_from_another_run(tmp_path: Path) -> None:
             evidence_index=evidence,
             **inputs,
         )
+
+
+def test_run_scoped_result_can_mark_time_authority_as_unevaluated(
+    tmp_path: Path,
+) -> None:
+    run_id = "run-00000000-0000-4000-8000-000000000002"
+    segment = tmp_path / "probe.json"
+    segment.write_bytes(b"{}")
+    local_path = segment.as_posix()
+    if os_name == "nt":
+        local_path = f"/{local_path}"
+    index_path = tmp_path / "evidence-index.yaml"
+    index_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "evidence-index.v1",
+                "run_id": run_id,
+                "generated_at": "2026-07-11T12:01:00Z",
+                "finalized": True,
+                "segments": [
+                    {
+                        "uri": segment.as_uri(),
+                        "local_path": local_path,
+                        "media_type": "application/json",
+                        "sha256": sha256(segment.read_bytes()).hexdigest(),
+                        "size_bytes": segment.stat().st_size,
+                        "retention_class": "pull-request-7d",
+                        "segment_index": 0,
+                        "upload_status": "local",
+                        "checksum_verified": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    inputs = result_inputs()
+    inputs.pop("result_id")
+
+    result = build_acceptance_result_v4(
+        result_id="result-00000000-0000-4000-8000-000000000001",
+        run_id=run_id,
+        domain_id="camera-domain",
+        time_authority=TimeAuthorityObservation(
+            source_id="external-clock",
+            measurement_kind="delivery_latency",
+            sample_count=0,
+            window_start_ns=0,
+            window_end_ns=0,
+            p50_ms=0,
+            p95_ms=0,
+            max_ms=0,
+            within_policy=False,
+        ),
+        time_authority_evidence_sha256=None,
+        assertions=(),
+        unevaluated=("$.clock_observation", "$.time_authority_observation"),
+        evidence_index=load_evidence_index(index_path),
+        **inputs,
+    )
+
+    assert result["status"] == "incomplete"
+    authority = result["time_authority_observation"]
+    assert result["schema_version"] == "acceptance-result.v4"
+    assert authority["p50_delivery_latency_ms"] == 0
+    assert authority["within_policy"] is False
+    assert "evidence_sha256" not in authority

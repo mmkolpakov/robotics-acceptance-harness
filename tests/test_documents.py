@@ -49,10 +49,14 @@ def test_load_bundle_accepts_current_scenario_contract(tmp_path: Path) -> None:
         max_clock_offset_p95_ms=2,
         max_clock_offset_ms=5,
     )
-    current["schema_version"] = "acceptance-scenario.v3"
-    scenario_path = tmp_path / "scenario-v3.yaml"
+    current["schema_version"] = "acceptance-scenario.v4"
+    policy = current["time_policy"]
+    policy["max_time_authority_delivery_latency_p50_ms"] = policy.pop("max_clock_offset_p50_ms")
+    policy["max_time_authority_delivery_latency_p95_ms"] = policy.pop("max_clock_offset_p95_ms")
+    policy["max_time_authority_delivery_latency_ms"] = policy.pop("max_clock_offset_ms")
+    scenario_path = tmp_path / "scenario-v4.yaml"
     scenario_path.write_text(yaml.safe_dump(current), encoding="utf-8")
 
     bundle = load_bundle(scenario_path, runtime_path=FIXTURES / "runtime.yaml")
 
-    assert bundle.scenario.schema_version == "acceptance-scenario.v3"
+    assert bundle.scenario.schema_version == "acceptance-scenario.v4"

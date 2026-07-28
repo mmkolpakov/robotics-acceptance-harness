@@ -273,8 +273,9 @@ def build_acceptance_result(
     return result
 
 
-def build_acceptance_result_v3(
+def _build_run_scoped_acceptance_result(
     *,
+    schema_version: str,
     result_id: str,
     run_id: str,
     domain_id: str,
@@ -282,7 +283,7 @@ def build_acceptance_result_v3(
     readiness: ReadinessResult,
     timing: TimingObservation,
     time_authority: TimeAuthorityObservation,
-    time_authority_evidence_sha256: str,
+    time_authority_evidence_sha256: str | None,
     assertions: Sequence[AssertionEvaluation],
     unevaluated: Sequence[str],
     started_at: datetime,
@@ -296,6 +297,8 @@ def build_acceptance_result_v3(
 ) -> dict[str, Any]:
     """Build and validate a run-scoped per-domain acceptance result."""
 
+    if schema_version not in {"acceptance-result.v3", "acceptance-result.v4"}:
+        raise ValueError(f"unsupported run-scoped result schema: {schema_version}")
     if evidence_index.index.data["run_id"] != run_id:
         raise ValueError("evidence index run_id must equal result run_id")
     result = _build_acceptance_result(
@@ -313,34 +316,150 @@ def build_acceptance_result_v3(
         hardware_timing=hardware_timing,
         hardware_timing_evidence_sha256=hardware_timing_evidence_sha256,
     )
+    authority_result: dict[str, Any] = {
+        "source_id": time_authority.source_id,
+        "sample_count": time_authority.sample_count,
+        "window_start_ns": time_authority.window_start_ns,
+        "window_end_ns": time_authority.window_end_ns,
+        "within_policy": time_authority.within_policy,
+    }
+    if schema_version == "acceptance-result.v4":
+        if time_authority.measurement_kind != "delivery_latency":
+            raise ValueError("acceptance-result.v4 requires delivery-latency evidence")
+        authority_result.update(
+            {
+                "p50_delivery_latency_ms": time_authority.p50_ms,
+                "p95_delivery_latency_ms": time_authority.p95_ms,
+                "max_delivery_latency_ms": time_authority.max_ms,
+            }
+        )
+    else:
+        if time_authority.measurement_kind != "clock_offset":
+            raise ValueError("legacy run-scoped results require clock-offset evidence")
+        authority_result.update(
+            {
+                "p50_offset_ms": time_authority.p50_ms,
+                "p95_offset_ms": time_authority.p95_ms,
+                "max_offset_ms": time_authority.max_ms,
+            }
+        )
+    if time_authority_evidence_sha256 is not None:
+        authority_result["evidence_sha256"] = time_authority_evidence_sha256
     result.update(
         {
-            "schema_version": "acceptance-result.v3",
+            "schema_version": schema_version,
             "result_id": result_id,
             "run_id": run_id,
             "scenario_id": bundle.scenario.data["scenario_id"],
             "domain_id": domain_id,
             "verdict_scope": "domain",
             "unevaluated": sorted(set(unevaluated)),
-            "time_authority_observation": {
-                "source_id": time_authority.source_id,
-                "sample_count": time_authority.sample_count,
-                "window_start_ns": time_authority.window_start_ns,
-                "window_end_ns": time_authority.window_end_ns,
-                "p50_offset_ms": time_authority.p50_offset_ms,
-                "p95_offset_ms": time_authority.p95_offset_ms,
-                "max_offset_ms": time_authority.max_offset_ms,
-                "within_policy": time_authority.within_policy,
-                "evidence_sha256": time_authority_evidence_sha256,
-            },
+            "time_authority_observation": authority_result,
         }
     )
-    if result["status"] != "error" and not time_authority.within_policy:
+    time_authority_evaluated = "$.time_authority_observation" not in result["unevaluated"]
+    if (
+        result["status"] != "error"
+        and time_authority_evaluated
+        and not time_authority.within_policy
+    ):
         result["status"] = "failed"
     elif result["status"] == "passed" and result["unevaluated"]:
         result["status"] = "incomplete"
     validate_document(result)
     return result
+
+
+def build_acceptance_result_v3(
+    *,
+    result_id: str,
+    run_id: str,
+    domain_id: str,
+    bundle: DocumentBundle,
+    readiness: ReadinessResult,
+    timing: TimingObservation,
+    time_authority: TimeAuthorityObservation,
+    time_authority_evidence_sha256: str | None,
+    assertions: Sequence[AssertionEvaluation],
+    unevaluated: Sequence[str],
+    started_at: datetime,
+    finished_at: datetime,
+    monotonic_duration_sec: float,
+    shutdown: Mapping[str, bool],
+    evidence_index: VerifiedEvidence,
+    forbidden_graph: ForbiddenGraphObservation,
+    hardware_timing: HardwareTimingObservation | None = None,
+    hardware_timing_evidence_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Build a legacy run-scoped result with v3 field names."""
+
+    return _build_run_scoped_acceptance_result(
+        schema_version="acceptance-result.v3",
+        result_id=result_id,
+        run_id=run_id,
+        domain_id=domain_id,
+        bundle=bundle,
+        readiness=readiness,
+        timing=timing,
+        time_authority=time_authority,
+        time_authority_evidence_sha256=time_authority_evidence_sha256,
+        assertions=assertions,
+        unevaluated=unevaluated,
+        started_at=started_at,
+        finished_at=finished_at,
+        monotonic_duration_sec=monotonic_duration_sec,
+        shutdown=shutdown,
+        evidence_index=evidence_index,
+        forbidden_graph=forbidden_graph,
+        hardware_timing=hardware_timing,
+        hardware_timing_evidence_sha256=hardware_timing_evidence_sha256,
+    )
+
+
+def build_acceptance_result_v4(
+    *,
+    result_id: str,
+    run_id: str,
+    domain_id: str,
+    bundle: DocumentBundle,
+    readiness: ReadinessResult,
+    timing: TimingObservation,
+    time_authority: TimeAuthorityObservation,
+    time_authority_evidence_sha256: str | None,
+    assertions: Sequence[AssertionEvaluation],
+    unevaluated: Sequence[str],
+    started_at: datetime,
+    finished_at: datetime,
+    monotonic_duration_sec: float,
+    shutdown: Mapping[str, bool],
+    evidence_index: VerifiedEvidence,
+    forbidden_graph: ForbiddenGraphObservation,
+    hardware_timing: HardwareTimingObservation | None = None,
+    hardware_timing_evidence_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Build the canonical run-scoped result with delivery-latency fields."""
+
+    return _build_run_scoped_acceptance_result(
+        schema_version="acceptance-result.v4",
+        result_id=result_id,
+        run_id=run_id,
+        domain_id=domain_id,
+        bundle=bundle,
+        readiness=readiness,
+        timing=timing,
+        time_authority=time_authority,
+        time_authority_evidence_sha256=time_authority_evidence_sha256,
+        assertions=assertions,
+        unevaluated=unevaluated,
+        started_at=started_at,
+        finished_at=finished_at,
+        monotonic_duration_sec=monotonic_duration_sec,
+        shutdown=shutdown,
+        evidence_index=evidence_index,
+        forbidden_graph=forbidden_graph,
+        hardware_timing=hardware_timing,
+        hardware_timing_evidence_sha256=hardware_timing_evidence_sha256,
+    )
 
 
 def _temporary_path(path: Path) -> Path:
@@ -451,6 +570,7 @@ def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
 __all__ = [
     "build_acceptance_result",
     "build_acceptance_result_v3",
+    "build_acceptance_result_v4",
     "write_contract_json",
     "write_junit_xml",
     "write_result_json",

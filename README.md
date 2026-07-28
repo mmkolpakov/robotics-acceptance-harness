@@ -54,6 +54,7 @@ published by
 | Observe a running execution and decide a verdict | `robotics-acceptance verify` | No |
 | Aggregate the complete set of domain results | `robotics-acceptance aggregate` | No |
 | Evaluate cross-domain causal chains | `robotics-acceptance trace-evaluate` | No |
+| Qualify transport without a domain execution | `robotics-acceptance transport-evaluate` | No |
 | Reuse a validated simulation bundle in project tests | `robotics_bundle` pytest fixture | No |
 
 ## Baseline
@@ -61,10 +62,11 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts>=0.9.0,<0.10` |
-| Scenarios | `acceptance-scenario.v1` through `v3` |
-| Results | Reads `acceptance-result.v1` through `v3`; writes run-scoped `v3` |
+| Contracts | `robotics-runtime-contracts>=0.10.0,<0.11` |
+| Scenarios | Reads `acceptance-scenario.v1` through `v4`; canonical run-scoped input is `v4` |
+| Results | Reads `acceptance-result.v1` through `v4`; writes run-scoped `v4` |
 | Aggregates | `acceptance-aggregate.v1`, `acceptance-aggregate.v2` |
+| Transport qualification | `transport-qualification-result.v1` |
 | ROS observation | ROS 2 Jazzy with `rclpy` and declared message packages |
 | Metrics | Newline-delimited OTLP JSON from the Collector file exporter |
 
@@ -134,8 +136,8 @@ The OTLP file is accepted only when the finalized evidence index covers its
 exact path, media type, byte size, and SHA-256 digest.
 
 `--domain-id` and `--run-context` are required for
-`acceptance-scenario.v2` and `acceptance-scenario.v3`. A v1 scenario omits both
-options; `--run-id` remains required for every verification.
+`acceptance-scenario.v2` through `acceptance-scenario.v4`. A v1 scenario omits
+both options; `--run-id` remains required for every verification.
 
 ## Aggregate Results
 
@@ -152,8 +154,13 @@ robotics-acceptance aggregate \
 `trace-evaluate` extends a valid domain aggregate with channel observations and
 verified per-domain OTLP trace evidence. Repeat `--causal-chain` for independent
 or branching flows, and run `robotics-acceptance trace-evaluate --help` for the
-repeatable `DOMAIN=PATH` arguments. Both commands return `0` for `passed`, `1`
-for a completed non-passing verdict, and `2` for invalid input.
+repeatable `DOMAIN=PATH` arguments.
+
+`transport-evaluate` applies the same channel and causal-trace checks without a
+scenario, runtime manifest, or per-domain result. It emits a
+`transport-qualification-result.v1` document and is the canonical interface for
+qualifying bridges and isolated ROS domain transport. These commands return `0`
+for `passed`, `1` for a completed non-passing verdict, and `2` for invalid input.
 
 For each channel, the first producer span opens the declared observation
 window. Every counted producer and consumer span must fit completely inside
@@ -165,7 +172,7 @@ channel contract.
 
 | Input | Required when | Contract |
 | --- | --- | --- |
-| Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v1` through `.v3` |
+| Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v1` through `.v4` |
 | Runtime manifest | `explain`, `verify`, pytest | `runtime-manifest.v1` |
 | Model manifest | Inference workload | `model-artifact-manifest.v1` |
 | Dataset manifest | MCAP playback | `dataset-manifest.v1` |
@@ -173,7 +180,8 @@ channel contract.
 | Verification record | HIL or real target | `execution-verification.v1` |
 | Evidence index | `verify` | `evidence-index.v1` or `.v2` |
 | Metrics | Metric assertions or physical observation | OTLP JSON |
-| Run context | v2/v3 `verify`, `aggregate`, `trace-evaluate` | `acceptance-run.v1` |
+| Run context | v2-v4 `verify`, `aggregate`, `trace-evaluate` | `acceptance-run.v1` |
+| Channel and causal-chain contracts | `trace-evaluate`, `transport-evaluate` | `zenoh-channel.v1`, `causal-chain.v1` |
 
 Local domain extensions remain explicit and digest-pinned:
 
@@ -211,6 +219,30 @@ harness never requests a lifecycle transition.
 Physical observation also validates aligned OTLP measurements for clock offset,
 clock drift, message age, and monotonicity, including their units, source, and
 synchronization protocol.
+
+Run-scoped simulation uses standard OTLP instruments:
+
+| Measurement | OTLP instrument | Required attributes |
+| --- | --- | --- |
+| `robotics.time_authority.delivery_latency` (`ms`) | Delta explicit-bucket histogram of RMW source-to-reception latency | `run.id`, `domain.id`, `time.source.id`, `time.measurement.method=rmw_source_to_reception_latency` |
+| `robotics.message.age` (`ms`) | Delta explicit-bucket histogram | `run.id`, `domain.id`, `channel` |
+| `robotics.message.received` (`{message}`) | Delta monotonic sum | `run.id`, `domain.id`, `channel` |
+| `robotics.message.lost` (`{message}`) | Delta monotonic sum | `run.id`, `domain.id`, `channel` |
+| `robotics.message.sequence_error` (`{message}`) | Delta monotonic sum | `run.id`, `domain.id`, `channel` |
+
+The data-plane verdict requires one unambiguous measured channel. Loss is
+derived from the received and lost counters over the measurement window;
+precomputed LastValue loss ratios are not accepted. Histogram percentiles use
+the conservative bound appropriate for the assertion direction. Missing,
+duplicate, or non-monotonic DDS publication sequence metadata fails the
+data-plane integrity assertion.
+
+The v4 contract names this measurement as delivery latency. It does not validate
+the `/clock` payload or hardware clock synchronization. The observer separately
+checks payload monotonicity, advancement, configured step multiples, and
+real-time factor; HIL observation uses dedicated hardware clock-offset metrics.
+A frozen or malformed simulation clock fails even when delivery latency is
+within policy.
 
 ## Pytest Plugin
 
