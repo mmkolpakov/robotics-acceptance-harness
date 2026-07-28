@@ -23,9 +23,10 @@ contracts source override is disabled by `uv build --no-sources`.
 
 The release workflow builds and tests the distributions once in a job without
 OIDC authority. It uploads those files as a short-lived workflow artifact.
-Two independent jobs then download the same files:
+The enabled publication jobs then download the same files:
 
-- `publish-pypi` publishes them through PyPI Trusted Publishing;
+- optional `publish-pypi` publishes them through PyPI Trusted Publishing when
+  `PYPI_PUBLISH_ENABLED` is `true`;
 - `github-release` attests them and attaches them to the GitHub Release.
 
 Only `publish-pypi` has the PyPI OIDC permission. That job does not check out
@@ -62,12 +63,16 @@ values:
 | Workflow | `release.yml` |
 | Environment | `pypi` |
 
-Do not create a `PYPI_API_TOKEN` secret. Until the external publisher is
-registered, the PyPI job is expected to fail closed.
+Do not create a `PYPI_API_TOKEN` secret. After the external publisher is
+registered, set the repository variable `PYPI_PUBLISH_ENABLED` to `true`.
+Until then, the PyPI job remains skipped and the attested GitHub Release is the
+canonical distribution channel. Once enabled, a PyPI publication failure fails
+the release workflow.
 
 Release the compatible `robotics-runtime-contracts` tag first and verify its
 GitHub Release wheel and build-provenance attestation. Foundation consumers pin
-that wheel by URL and SHA-256. PyPI promotion remains a separate fail-closed
-channel until the trusted publisher is registered. Only then create and push
-the protected `robotics-acceptance-harness` tag. The tag must equal `v`
-followed by the installed harness package version.
+that wheel by URL and SHA-256. PyPI promotion remains a separate, explicitly
+enabled channel. Create and push the protected
+`robotics-acceptance-harness` tag after the compatible contracts GitHub Release
+and build-provenance attestation are available. The tag must equal `v` followed
+by the installed harness package version.

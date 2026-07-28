@@ -85,6 +85,7 @@ jobs:
           retention-days: 1
 
   publish-pypi:
+    if: vars.PYPI_PUBLISH_ENABLED == 'true'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
