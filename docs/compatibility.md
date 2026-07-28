@@ -8,7 +8,7 @@ compatible. The documented CLI, exit codes, pytest fixtures, and emitted
 contract documents are public interfaces.
 
 The Python distribution declares
-`robotics-runtime-contracts>=0.9.0,<0.10`. Development uses the sibling checkout
+`robotics-runtime-contracts>=0.10.0,<0.11`. Development uses the sibling checkout
 through `tool.uv.sources`; published wheel metadata contains only the version
 specifier. `uv build --no-sources` is the packaging gate.
 
@@ -21,9 +21,9 @@ new document and never mutate stored evidence.
 
 | Input or output | Accepted versions |
 | --- | --- |
-| Scenario | `acceptance-scenario.v1`, `acceptance-scenario.v2`, `acceptance-scenario.v3` |
+| Scenario | `acceptance-scenario.v1` through `acceptance-scenario.v4` |
 | Runtime manifest | `runtime-manifest.v1` |
-| Result | `acceptance-result.v1`, `acceptance-result.v2`, `acceptance-result.v3` |
+| Result | `acceptance-result.v1` through `acceptance-result.v4` |
 | Run context | `acceptance-run.v1` |
 | Aggregate | `acceptance-aggregate.v1`, `acceptance-aggregate.v2` |
 | Evidence index | `evidence-index.v1`, `evidence-index.v2` |
@@ -31,15 +31,16 @@ new document and never mutate stored evidence.
 Compatibility is checked per schema, not inferred from the package version.
 Unknown schema identifiers fail closed.
 
-Release `0.9.0` writes `acceptance-result.v3` for run-scoped verification so
-verified NDJSON trace segments remain attached to the verdict. Aggregation reads
-both `v2` and `v3` during the migration window. Stored `v2` results remain
-valid and require no rewrite; new verification runs use `v3`.
+Release `0.11.0` writes `acceptance-result.v4` for v4 run-scoped verification.
+Version 4 separates RMW delivery latency from hardware clock offset while
+retaining verified NDJSON trace evidence. Aggregation reads `v2` through `v4`
+during the migration window; new infrastructure scenarios use `v4`.
 
 `verify` always requires `--run-id`. The `--domain-id` and `--run-context`
-options are required for `acceptance-scenario.v2` and v3; v1 verification
+options are required for `acceptance-scenario.v2` through v4; v1 verification
 remains valid without them. Version 3 adds an explicit stepped-simulation skip
-budget.
+budget; version 4 gives delivery latency and hardware clock synchronization
+separate names and policies.
 
 Channel delivery evaluation uses the first producer span as the start of the
 declared observation window. Spans crossing either boundary fail closed.

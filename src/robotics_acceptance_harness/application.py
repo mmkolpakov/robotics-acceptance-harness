@@ -21,6 +21,8 @@ from robotics_acceptance_harness.hardware_timing import (
 )
 from robotics_acceptance_harness.metrics import (
     AssertionEvaluation,
+    HistogramSample,
+    MetricPoint,
     MetricSample,
     evaluate_metric_assertions,
 )
@@ -37,6 +39,7 @@ from robotics_acceptance_harness.readiness import (
 from robotics_acceptance_harness.result import (
     build_acceptance_result,
     build_acceptance_result_v3,
+    build_acceptance_result_v4,
     write_junit_xml,
     write_result_json,
 )
@@ -75,6 +78,7 @@ def _unevaluated_declarations(scenario: Mapping[str, Any]) -> list[str]:
     if scenario["schema_version"] in {
         "acceptance-scenario.v2",
         "acceptance-scenario.v3",
+        "acceptance-scenario.v4",
     }:
         return []
     return [
@@ -85,11 +89,11 @@ def _unevaluated_declarations(scenario: Mapping[str, Any]) -> list[str]:
 
 
 def _run_domain_metrics(
-    samples: Sequence[MetricSample],
+    samples: Sequence[MetricPoint],
     *,
     run_id: str,
     domain_id: str,
-) -> tuple[MetricSample, ...]:
+) -> tuple[MetricPoint, ...]:
     return tuple(
         sample
         for sample in samples
@@ -134,28 +138,41 @@ def explain_bundle(bundle: DocumentBundle) -> dict[str, Any]:
     }
 
 
-def _latest_metric(samples: Sequence[MetricSample], name: str) -> float | None:
-    matches = [sample for sample in samples if sample.name == name]
+def _latest_metric(samples: Sequence[MetricPoint], name: str) -> float | None:
+    matches = [
+        sample for sample in samples if isinstance(sample, MetricSample) and sample.name == name
+    ]
     if not matches:
         return None
     return max(matches, key=lambda sample: sample.observed_at_ns).value
 
 
 def _measurement_metrics(
-    samples: Sequence[MetricSample],
+    samples: Sequence[MetricPoint],
     *,
     window_start_ns: int,
     window_end_ns: int,
-) -> tuple[MetricSample, ...]:
+) -> tuple[MetricPoint, ...]:
     return tuple(
-        sample for sample in samples if window_start_ns <= sample.observed_at_ns <= window_end_ns
+        sample
+        for sample in samples
+        if sample.observed_at_ns <= window_end_ns
+        and (
+            sample.observed_at_ns >= window_start_ns
+            or (isinstance(sample, HistogramSample) and sample.temporality == "cumulative")
+            or (
+                isinstance(sample, MetricSample)
+                and sample.instrument_kind == "sum"
+                and sample.temporality == "cumulative"
+            )
+        )
     )
 
 
 def _enrich_clock_samples(
     mode: str,
     samples: Sequence[ClockSample],
-    metrics: Sequence[MetricSample],
+    metrics: Sequence[MetricPoint],
 ) -> tuple[ClockSample, ...]:
     if mode != "simulation_realtime" or len(samples) < 2:
         return tuple(samples)
@@ -203,7 +220,7 @@ def run_verification(
     domain_id: str | None = None,
     run_context_path: str | Path | None = None,
     evidence_index_path: str | Path,
-    metric_samples: Sequence[MetricSample] = (),
+    metric_samples: Sequence[MetricPoint] = (),
     otel_metrics_path: str | Path | None = None,
     output_dir: str | Path,
     observer_factory: Callable[..., ClockObserver] = RosGraphObserver,
@@ -233,6 +250,7 @@ def run_verification(
     is_run_scoped = bundle.scenario.schema_version in {
         "acceptance-scenario.v2",
         "acceptance-scenario.v3",
+        "acceptance-scenario.v4",
     }
     run_context = None
     if is_run_scoped:
@@ -343,7 +361,10 @@ def run_verification(
     hardware_timing: HardwareTimingObservation | None = None
     timing_failure: AssertionEvaluation | None = None
     if physical:
-        hardware_timing = evaluate_hardware_timing(scenario["time_policy"], metric_samples)
+        hardware_timing = evaluate_hardware_timing(
+            scenario["time_policy"],
+            tuple(sample for sample in metric_samples if isinstance(sample, MetricSample)),
+        )
         timing = TimingObservation(
             monotonic=hardware_timing.monotonic,
             offset_ms=hardware_timing.offset_ms,
@@ -419,7 +440,12 @@ def run_verification(
             window_start_ns=measurement_started_ns,
             window_end_ns=measurement_finished_ns,
         )
-        result = build_acceptance_result_v3(
+        result_builder = (
+            build_acceptance_result_v4
+            if bundle.scenario.schema_version == "acceptance-scenario.v4"
+            else build_acceptance_result_v3
+        )
+        result = result_builder(
             result_id=result_id,
             run_id=run_id,
             domain_id=domain_id,

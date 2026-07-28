@@ -6,9 +6,18 @@ from typing import Any
 from robotics_acceptance_harness.evidence import VerifiedEvidence
 from robotics_acceptance_harness.metrics import (
     AssertionEvaluation,
-    MetricSample,
+    HistogramSample,
+    MetricAggregationError,
+    MetricPoint,
+    counter_window_aggregate,
     evaluate_metric_assertions,
+    histogram_window_coverage,
+    require_window_coverage,
 )
+
+MESSAGE_COUNTER_UNIT = "{message}"
+SEQUENCE_METHOD_ATTRIBUTE = "sequence.measurement.method"
+SINGLE_PUBLISHER_SEQUENCE_METHOD = "rmw_publication_sequence_single_publisher"
 
 
 def _boolean_evaluation(assertion_id: str, passed: bool, message: str) -> AssertionEvaluation:
@@ -24,7 +33,7 @@ def _boolean_evaluation(assertion_id: str, passed: bool, message: str) -> Assert
 def evaluate_data_plane_policy(
     policy: Mapping[str, Any],
     runtime: Mapping[str, Any],
-    samples: Sequence[MetricSample],
+    samples: Sequence[MetricPoint],
     *,
     domain_id: str,
     window_start_ns: int,
@@ -49,36 +58,170 @@ def evaluate_data_plane_policy(
                 "Fast DDS profile digest differs",
             )
         )
-    metric_assertions = (
-        {
-            "assertion_id": "data-plane-message-age",
-            "metric_name": "robotics.message.age",
-            "unit": "ms",
-            "aggregation": "p95",
-            "operator": "lte",
-            "threshold": policy["max_message_age_ms"],
-            "window_sec": 86_400,
-            "attribute_match": {"domain.id": domain_id},
-        },
-        {
-            "assertion_id": "data-plane-loss-ratio",
-            "metric_name": "robotics.message.loss_ratio",
-            "unit": "1",
-            "aggregation": "max",
-            "operator": "lte",
-            "threshold": policy["max_loss_ratio"],
-            "window_sec": 86_400,
-            "attribute_match": {"domain.id": domain_id},
-        },
-    )
-    evaluations.extend(
-        evaluate_metric_assertions(
-            metric_assertions,
-            samples,
+    try:
+        measured_names = {
+            "robotics.message.age",
+            "robotics.message.received",
+            "robotics.message.lost",
+            "robotics.message.sequence_error",
+        }
+        channels = {
+            sample.attributes.get("channel")
+            for sample in samples
+            if sample.name in measured_names and sample.attributes.get("domain.id") == domain_id
+        }
+        if len(channels) != 1 or not isinstance(next(iter(channels), None), str):
+            raise MetricAggregationError(
+                "data-plane evidence must identify exactly one measured channel"
+            )
+        channel = str(next(iter(channels)))
+        attribute_match = {"domain.id": domain_id, "channel": channel}
+        counter_attribute_match = {
+            **attribute_match,
+            SEQUENCE_METHOD_ATTRIBUTE: SINGLE_PUBLISHER_SEQUENCE_METHOD,
+        }
+        message_age_points = [
+            sample
+            for sample in samples
+            if sample.name == "robotics.message.age"
+            and all(sample.attributes.get(key) == value for key, value in attribute_match.items())
+        ]
+        if not message_age_points or not all(
+            isinstance(sample, HistogramSample) for sample in message_age_points
+        ):
+            raise MetricAggregationError("robotics.message.age must be an OTLP Histogram")
+        message_age_coverage = histogram_window_coverage(
+            [sample for sample in message_age_points if isinstance(sample, HistogramSample)],
             window_start_ns=window_start_ns,
             window_end_ns=window_end_ns,
         )
-    )
+        require_window_coverage(
+            message_age_coverage,
+            metric_name="robotics.message.age",
+            window_start_ns=window_start_ns,
+            window_end_ns=window_end_ns,
+        )
+        evaluations.extend(
+            evaluate_metric_assertions(
+                (
+                    {
+                        "assertion_id": "data-plane-message-age",
+                        "metric_name": "robotics.message.age",
+                        "unit": "ms",
+                        "aggregation": "p95",
+                        "operator": "lte",
+                        "threshold": policy["max_message_age_ms"],
+                        "window_sec": 86_400,
+                        "attribute_match": attribute_match,
+                    },
+                ),
+                samples,
+                window_start_ns=window_start_ns,
+                window_end_ns=window_end_ns,
+            )
+        )
+        received = counter_window_aggregate(
+            samples,
+            "robotics.message.received",
+            attribute_match=counter_attribute_match,
+            expected_unit=MESSAGE_COUNTER_UNIT,
+            window_start_ns=window_start_ns,
+            window_end_ns=window_end_ns,
+        )
+        lost = counter_window_aggregate(
+            samples,
+            "robotics.message.lost",
+            attribute_match=counter_attribute_match,
+            expected_unit=MESSAGE_COUNTER_UNIT,
+            window_start_ns=window_start_ns,
+            window_end_ns=window_end_ns,
+        )
+        sequence_errors = counter_window_aggregate(
+            samples,
+            "robotics.message.sequence_error",
+            attribute_match=counter_attribute_match,
+            expected_unit=MESSAGE_COUNTER_UNIT,
+            window_start_ns=window_start_ns,
+            window_end_ns=window_end_ns,
+        )
+        if not (received.coverage == lost.coverage == sequence_errors.coverage):
+            raise MetricAggregationError(
+                "message counters do not cover the same collection intervals"
+            )
+        require_window_coverage(
+            received.coverage,
+            metric_name="message counters",
+            window_start_ns=window_start_ns,
+            window_end_ns=window_end_ns,
+        )
+        if not (
+            received.total.is_integer()
+            and lost.total.is_integer()
+            and sequence_errors.total.is_integer()
+        ):
+            raise MetricAggregationError("message counters must contain whole-message counts")
+        sequence_integrity = sequence_errors.total == 0
+        evaluations.append(
+            AssertionEvaluation(
+                assertion_id="data-plane-sequence-integrity",
+                status="passed" if sequence_integrity else "failed",
+                observed_value=sequence_errors.total,
+                unit=MESSAGE_COUNTER_UNIT,
+                message=(
+                    ""
+                    if sequence_integrity
+                    else "DDS publication sequence metadata is unavailable or non-monotonic"
+                ),
+            )
+        )
+        total = received.total + lost.total
+        if total <= 0:
+            raise MetricAggregationError("message counters contain no observations")
+        loss_ratio = lost.total / total
+        passed = loss_ratio <= float(policy["max_loss_ratio"])
+        evaluations.append(
+            AssertionEvaluation(
+                assertion_id="data-plane-loss-ratio",
+                status="passed" if passed else "failed",
+                observed_value=loss_ratio,
+                unit="1",
+                message=("" if passed else f"threshold lte {policy['max_loss_ratio']}"),
+            )
+        )
+    except MetricAggregationError as error:
+        if not any(
+            evaluation.assertion_id == "data-plane-message-age" for evaluation in evaluations
+        ):
+            evaluations.append(
+                AssertionEvaluation(
+                    assertion_id="data-plane-message-age",
+                    status="error",
+                    observed_value=None,
+                    unit="ms",
+                    message=str(error),
+                )
+            )
+        evaluations.append(
+            AssertionEvaluation(
+                assertion_id="data-plane-loss-ratio",
+                status="error",
+                observed_value=None,
+                unit="1",
+                message=str(error),
+            )
+        )
+        if not any(
+            evaluation.assertion_id == "data-plane-sequence-integrity" for evaluation in evaluations
+        ):
+            evaluations.append(
+                AssertionEvaluation(
+                    assertion_id="data-plane-sequence-integrity",
+                    status="error",
+                    observed_value=None,
+                    unit=MESSAGE_COUNTER_UNIT,
+                    message=str(error),
+                )
+            )
     return tuple(evaluations)
 
 
@@ -189,4 +332,9 @@ def evaluate_evidence_policy(
     )
 
 
-__all__ = ["evaluate_data_plane_policy", "evaluate_evidence_policy"]
+__all__ = [
+    "SEQUENCE_METHOD_ATTRIBUTE",
+    "SINGLE_PUBLISHER_SEQUENCE_METHOD",
+    "evaluate_data_plane_policy",
+    "evaluate_evidence_policy",
+]

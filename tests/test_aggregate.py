@@ -12,6 +12,7 @@ import pytest
 from robotics_acceptance_harness.aggregate import (
     aggregate_results,
     evaluate_trace_aggregate,
+    evaluate_transport_qualification,
 )
 from robotics_acceptance_harness.documents import BundleValidationError, load_bundle, load_document
 from robotics_acceptance_harness.evidence import load_evidence_index
@@ -19,7 +20,7 @@ from robotics_acceptance_harness.forbidden_graph import ForbiddenGraphObservatio
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import GraphSnapshot, ReadinessResult
 from robotics_acceptance_harness.result import (
-    build_acceptance_result_v3,
+    build_acceptance_result_v4,
     write_result_json,
 )
 from robotics_acceptance_harness.time_authority import TimeAuthorityObservation
@@ -89,7 +90,7 @@ def result(
             ],
         },
     )
-    document = build_acceptance_result_v3(
+    document = build_acceptance_result_v4(
         result_id=f"result-01234567-89ab-4def-8123-456789abcde{suffix}",
         run_id=RUN_ID,
         domain_id=domain_id,
@@ -98,6 +99,7 @@ def result(
         timing=TimingObservation(True, 0, 0, 1, 0, 0, 1),
         time_authority=TimeAuthorityObservation(
             "simulation-clock",
+            "delivery_latency",
             30,
             1,
             30,
@@ -127,7 +129,7 @@ def result(
         evidence_index=load_evidence_index(evidence_path),
         forbidden_graph=ForbiddenGraphObservation((), (), (), ()),
     )
-    assert document["schema_version"] == "acceptance-result.v3"
+    assert document["schema_version"] == "acceptance-result.v4"
     return write_result_json(document, tmp_path / f"result-{suffix}.json")
 
 
@@ -371,6 +373,7 @@ def trace_aggregate(
     consumer_parent: int | None = None,
     consumer_link: int | None = None,
     consumer_span_byte: int = 3,
+    consumer_message_id: str = "message-1",
     chain_count: int = 1,
 ) -> dict[str, object]:
     context_path = run_context(tmp_path)
@@ -385,6 +388,7 @@ def trace_aggregate(
         "control-domain",
         "observation receive",
         consumer_span_byte,
+        message_id=consumer_message_id,
         parent_byte=consumer_parent,
         link_byte=consumer_link,
     )
@@ -420,6 +424,48 @@ def trace_aggregate(
     return json.loads(output.read_text(encoding="utf-8"))
 
 
+def transport_qualification(
+    tmp_path: Path,
+    *,
+    relationship: str,
+    consumer_link: int | None = None,
+    consumer_message_id: str = "message-1",
+) -> dict[str, object]:
+    producer = trace_file(
+        tmp_path,
+        "camera-domain",
+        "observation publish",
+        2,
+    )
+    consumer = trace_file(
+        tmp_path,
+        "control-domain",
+        "observation receive",
+        3,
+        message_id=consumer_message_id,
+        link_byte=consumer_link,
+    )
+    channel_path = channel_contract(tmp_path, relationship)
+    output = evaluate_transport_qualification(
+        run_id=RUN_ID,
+        causal_chain_paths=[causal_chain(tmp_path, channel_path)],
+        channel_contract_paths=[channel_path],
+        trace_paths={
+            "camera-domain": producer,
+            "control-domain": consumer,
+        },
+        evidence_index_paths={
+            "camera-domain": trace_evidence_index(tmp_path, "camera-domain", producer),
+            "control-domain": trace_evidence_index(tmp_path, "control-domain", consumer),
+        },
+        observation_output_dir=tmp_path / "transport-observations",
+        output_path=tmp_path / "transport-qualification.json",
+        qualification_id="qualification-01234567-89ab-4def-8123-456789abcdef",
+        generated_at=datetime(2026, 7, 26, 12, 3, tzinfo=UTC),
+    )
+    return json.loads(output.read_text(encoding="utf-8"))
+
+
 def test_aggregate_requires_and_emits_every_registered_domain(tmp_path: Path) -> None:
     context_path = run_context(tmp_path)
     output = base_aggregate(tmp_path, context_path)
@@ -438,6 +484,10 @@ def test_aggregate_reads_legacy_v2_result_during_migration(tmp_path: Path) -> No
     legacy_path = result(tmp_path, "camera-domain", "0")
     legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
     legacy["schema_version"] = "acceptance-result.v2"
+    authority = legacy["time_authority_observation"]
+    authority["p50_offset_ms"] = authority.pop("p50_delivery_latency_ms")
+    authority["p95_offset_ms"] = authority.pop("p95_delivery_latency_ms")
+    authority["max_offset_ms"] = authority.pop("max_delivery_latency_ms")
     legacy["evidence"][0]["media_type"] = "application/json"
     write_result_json(legacy, legacy_path)
 
@@ -539,6 +589,32 @@ def test_trace_aggregate_proves_span_link(tmp_path: Path) -> None:
     assert channel["destination_domain_id"] == "control-domain"
 
 
+def test_transport_qualification_passes_without_domain_execution(tmp_path: Path) -> None:
+    result = transport_qualification(
+        tmp_path,
+        relationship="link",
+        consumer_link=2,
+    )
+
+    assert result["schema_version"] == "transport-qualification-result.v1"
+    assert result["verdict"]["status"] == "passed"
+    assert "acceptance_run_sha256" not in result
+    assert "per_domain_results" not in result
+    assert result["channel_observations"][0]["status"] == "passed"
+
+
+def test_transport_qualification_fails_measured_delivery_loss(tmp_path: Path) -> None:
+    result = transport_qualification(
+        tmp_path,
+        relationship="link",
+        consumer_link=2,
+        consumer_message_id="message-2",
+    )
+
+    assert result["verdict"]["status"] == "failed"
+    assert result["channel_observations"][0]["status"] == "failed"
+
+
 def test_trace_aggregate_proves_parent_chain(tmp_path: Path) -> None:
     aggregate = trace_aggregate(
         tmp_path,
@@ -587,3 +663,25 @@ def test_trace_aggregate_fails_on_broken_span_link(tmp_path: Path) -> None:
     assert aggregate["causal_chains"][0]["status"] == "failed"
     violations = aggregate["causal_chains"][0]["violations"]
     assert violations[0]["code"] == "relationship_mismatch"
+
+
+def test_trace_aggregate_writes_contract_valid_failed_channel_observation(
+    tmp_path: Path,
+) -> None:
+    aggregate = trace_aggregate(
+        tmp_path,
+        relationship="link",
+        consumer_link=2,
+        consumer_message_id="message-2",
+    )
+
+    assert aggregate["cross_domain_e2e"]["status"] == "failed"
+    observation = json.loads(
+        (tmp_path / "observations" / "sensor.control.json").read_text(encoding="utf-8")
+    )
+    assert observation["status"] == "failed"
+    assert {item["code"] for item in observation["violations"]} == {
+        "duplicate_count_exceeded",
+        "loss_ratio_exceeded",
+    }
+    assert all("channel_id" not in item for item in observation["violations"])

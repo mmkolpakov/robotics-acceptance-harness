@@ -10,7 +10,13 @@ from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
     ExportMetricsServiceRequest,
 )
 
-from robotics_acceptance_harness.metrics import MetricAttribute, MetricSample
+from robotics_acceptance_harness.metrics import (
+    HistogramSample,
+    MetricAttribute,
+    MetricPoint,
+    MetricSample,
+    MetricTemporality,
+)
 
 
 class MetricInputError(ValueError):
@@ -24,6 +30,26 @@ def _number_value(point: Any) -> float | None:
     if value_kind == "as_int":
         return float(point.as_int)
     return None
+
+
+def _temporality(value: int) -> MetricTemporality:
+    if value == 1:
+        return "delta"
+    if value == 2:
+        return "cumulative"
+    return "unspecified"
+
+
+def _optional_number(point: Any, field_name: str) -> float | None:
+    try:
+        present = point.HasField(field_name)
+    except ValueError:
+        present = False
+    return float(getattr(point, field_name)) if present else None
+
+
+def _has_recorded_value(point: Any) -> bool:
+    return int(point.flags) & 1 == 0
 
 
 def otlp_attribute_value(value: Any) -> MetricAttribute | None:
@@ -52,11 +78,11 @@ def load_otlp_json_metrics(
     path: str | Path,
     *,
     expected_sha256: str | None = None,
-) -> tuple[MetricSample, ...]:
+) -> tuple[MetricPoint, ...]:
     """Read newline-delimited OTLP JSON emitted by the Collector file exporter."""
 
     source = Path(path).expanduser().resolve()
-    samples: list[MetricSample] = []
+    samples: list[MetricPoint] = []
     try:
         payload_bytes = source.read_bytes()
     except OSError as error:
@@ -91,25 +117,71 @@ def load_otlp_json_metrics(
                 }
                 for metric in scope_metrics.metrics:
                     data_kind = metric.WhichOneof("data")
-                    if data_kind not in {"gauge", "sum"}:
+                    if data_kind not in {"gauge", "sum", "histogram"}:
                         continue
                     data = getattr(metric, data_kind)
+                    temporality = (
+                        _temporality(int(data.aggregation_temporality))
+                        if data_kind in {"sum", "histogram"}
+                        else None
+                    )
                     for point in data.data_points:
+                        if not _has_recorded_value(point):
+                            continue
+                        attributes = {
+                            **scope_attributes,
+                            **otlp_attributes(point.attributes),
+                        }
+                        if data_kind == "histogram":
+                            try:
+                                samples.append(
+                                    HistogramSample(
+                                        name=metric.name,
+                                        unit=metric.unit,
+                                        observed_at_ns=int(point.time_unix_nano),
+                                        count=int(point.count),
+                                        bucket_counts=tuple(
+                                            int(value) for value in point.bucket_counts
+                                        ),
+                                        explicit_bounds=tuple(
+                                            float(value) for value in point.explicit_bounds
+                                        ),
+                                        attributes=attributes,
+                                        temporality=temporality or "unspecified",
+                                        start_time_ns=int(point.start_time_unix_nano),
+                                        sum=_optional_number(point, "sum"),
+                                        min=_optional_number(point, "min"),
+                                        max=_optional_number(point, "max"),
+                                    )
+                                )
+                            except ValueError as error:
+                                raise MetricInputError(
+                                    f"invalid OTLP histogram at {source}:{line_number}: {error}"
+                                ) from error
+                            continue
                         value = _number_value(point)
                         if value is None:
                             continue
-                        samples.append(
-                            MetricSample(
-                                name=metric.name,
-                                value=value,
-                                unit=metric.unit,
-                                observed_at_ns=int(point.time_unix_nano),
-                                attributes={
-                                    **scope_attributes,
-                                    **otlp_attributes(point.attributes),
-                                },
+                        try:
+                            samples.append(
+                                MetricSample(
+                                    name=metric.name,
+                                    value=value,
+                                    unit=metric.unit,
+                                    observed_at_ns=int(point.time_unix_nano),
+                                    attributes=attributes,
+                                    instrument_kind=data_kind,
+                                    temporality=temporality,
+                                    start_time_ns=int(point.start_time_unix_nano),
+                                    monotonic=bool(data.is_monotonic)
+                                    if data_kind == "sum"
+                                    else False,
+                                )
                             )
-                        )
+                        except ValueError as error:
+                            raise MetricInputError(
+                                f"invalid OTLP metric at {source}:{line_number}: {error}"
+                            ) from error
     return tuple(samples)
 
 

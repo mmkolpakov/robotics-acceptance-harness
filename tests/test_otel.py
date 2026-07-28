@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from robotics_acceptance_harness.metrics import HistogramSample, MetricSample
 from robotics_acceptance_harness.otel import MetricInputError, load_otlp_json_metrics
 
 
@@ -66,15 +67,75 @@ def test_loads_standard_otlp_json_number_points(tmp_path: Path) -> None:
 
     samples = load_otlp_json_metrics(path)
 
-    assert [(sample.name, sample.value, sample.unit) for sample in samples] == [
+    assert all(isinstance(sample, MetricSample) for sample in samples)
+    scalar_samples = [sample for sample in samples if isinstance(sample, MetricSample)]
+    assert [(sample.name, sample.value, sample.unit) for sample in scalar_samples] == [
         ("robotics.message.age", 12.5, "ms"),
         ("robotics.message.lost", 0.0, "1"),
     ]
-    assert samples[0].attributes == {
+    assert scalar_samples[0].attributes == {
         "robotics.clock.sync_protocol": "ptp",
         "robotics.clock.source": "pmc",
     }
-    assert samples[1].attributes == {"robotics.clock.sync_protocol": "ptp"}
+    assert scalar_samples[1].attributes == {"robotics.clock.sync_protocol": "ptp"}
+    assert scalar_samples[1].instrument_kind == "sum"
+    assert scalar_samples[1].temporality == "cumulative"
+    assert scalar_samples[1].monotonic
+
+
+def test_loads_explicit_bucket_histogram_without_expanding_events(tmp_path: Path) -> None:
+    payload = {
+        "resourceMetrics": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "domain.id", "value": {"stringValue": "camera"}},
+                    ]
+                },
+                "scopeMetrics": [
+                    {
+                        "metrics": [
+                            {
+                                "name": "robotics.message.age",
+                                "unit": "ms",
+                                "histogram": {
+                                    "aggregationTemporality": 1,
+                                    "dataPoints": [
+                                        {
+                                            "startTimeUnixNano": "100",
+                                            "timeUnixNano": "200",
+                                            "count": "50000",
+                                            "sum": 125000.0,
+                                            "min": 0.1,
+                                            "max": 12.5,
+                                            "explicitBounds": [1, 5, 10],
+                                            "bucketCounts": ["10000", "25000", "14000", "1000"],
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+    path = tmp_path / "metrics.json"
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    samples = load_otlp_json_metrics(path)
+
+    assert len(samples) == 1
+    histogram = samples[0]
+    assert isinstance(histogram, HistogramSample)
+    assert histogram.temporality == "delta"
+    assert histogram.count == 50_000
+    assert histogram.bucket_counts == (10_000, 25_000, 14_000, 1_000)
+    assert histogram.explicit_bounds == (1, 5, 10)
+    assert histogram.sum == 125_000
+    assert histogram.min == 0.1
+    assert histogram.max == 12.5
+    assert histogram.attributes == {"domain.id": "camera"}
 
 
 def test_invalid_otlp_json_reports_line(tmp_path: Path) -> None:

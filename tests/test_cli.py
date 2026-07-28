@@ -107,3 +107,63 @@ def test_v1_verify_does_not_require_domain_or_run_context(
     assert captured["domain_id"] is None
     assert captured["run_context_path"] is None
     assert json.loads(capsys.readouterr().out)["status"] == "passed"
+
+
+def test_transport_evaluate_maps_domain_evidence_and_reports_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+    output = tmp_path / "transport-qualification.json"
+
+    def fake_evaluate_transport_qualification(**arguments: object) -> Path:
+        captured.update(arguments)
+        output.write_text(
+            json.dumps({"verdict": {"status": "passed"}}),
+            encoding="utf-8",
+        )
+        return output
+
+    monkeypatch.setattr(
+        "robotics_acceptance_harness.cli.evaluate_transport_qualification",
+        fake_evaluate_transport_qualification,
+    )
+
+    exit_code = main(
+        [
+            "transport-evaluate",
+            "--run-id",
+            "run-6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+            "--causal-chain",
+            "causal-chain.json",
+            "--channel-contract",
+            "channel.json",
+            "--trace",
+            "source=source-traces.json",
+            "--trace",
+            "target=target-traces.json",
+            "--evidence-index",
+            "source=source-evidence.json",
+            "--evidence-index",
+            "target=target-evidence.json",
+            "--observation-output",
+            str(tmp_path / "observations"),
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["trace_paths"] == {
+        "source": "source-traces.json",
+        "target": "target-traces.json",
+    }
+    assert captured["evidence_index_paths"] == {
+        "source": "source-evidence.json",
+        "target": "target-evidence.json",
+    }
+    assert json.loads(capsys.readouterr().out) == {
+        "qualification": str(output),
+        "status": "passed",
+    }

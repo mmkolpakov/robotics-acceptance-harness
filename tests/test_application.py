@@ -15,6 +15,9 @@ from robotics_acceptance_harness.application import VerificationError, run_verif
 from robotics_acceptance_harness.documents import load_bundle
 from robotics_acceptance_harness.metrics import MetricSample
 from robotics_acceptance_harness.readiness import GraphSnapshot, TopicObservation
+from robotics_acceptance_harness.time_authority import (
+    DELIVERY_LATENCY_METRIC,
+)
 from robotics_acceptance_harness.timing import ClockSample
 
 FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
@@ -175,7 +178,7 @@ def _write_evidence_index(path: Path, metrics_path: Path, *, run_id: str) -> Non
 def _run_scoped_bundle(
     tmp_path: Path,
     *,
-    schema_version: str = "acceptance-scenario.v2",
+    schema_version: str = "acceptance-scenario.v4",
 ):
     scenario = yaml.safe_load((FIXTURES / "scenario.yaml").read_text(encoding="utf-8"))
     scenario["timeouts"]["stable_for_sec"] = 0
@@ -188,6 +191,11 @@ def _run_scoped_bundle(
         max_clock_offset_p95_ms=2,
         max_clock_offset_ms=5,
     )
+    if schema_version == "acceptance-scenario.v4":
+        policy = migrated["time_policy"]
+        policy["max_time_authority_delivery_latency_p50_ms"] = policy.pop("max_clock_offset_p50_ms")
+        policy["max_time_authority_delivery_latency_p95_ms"] = policy.pop("max_clock_offset_p95_ms")
+        policy["max_time_authority_delivery_latency_ms"] = policy.pop("max_clock_offset_ms")
     migrated["schema_version"] = schema_version
     scenario_path = tmp_path / f"{schema_version}.yaml"
     scenario_path.write_text(
@@ -203,6 +211,8 @@ def _write_v2_metrics(
     timestamps: list[int],
     run_id: str = SIMULATION_RUN_ID,
     domain_id: str = "camera-domain",
+    time_authority_metric: str = DELIVERY_LATENCY_METRIC,
+    window_start_ns: int | None = None,
 ) -> None:
     common_attributes = [
         {
@@ -217,33 +227,130 @@ def _write_v2_metrics(
             "key": "time.source.id",
             "value": {"stringValue": "simulation-clock"},
         },
+        {
+            "key": "time.measurement.method",
+            "value": {"stringValue": "rmw_source_to_reception_latency"},
+        },
+        {
+            "key": "channel",
+            "value": {"stringValue": "/robotics/runtime_probe"},
+        },
     ]
     metrics = [
         {
-            "name": "robotics.time_authority.offset",
+            "name": time_authority_metric,
             "unit": "ms",
-            "gauge": {
+            "histogram": {
+                "aggregationTemporality": 1,
                 "dataPoints": [
-                    {"timeUnixNano": str(timestamp), "asDouble": 0.1} for timestamp in timestamps
-                ]
+                    {
+                        "startTimeUnixNano": str(
+                            timestamps[index - 1]
+                            if index > 0
+                            else (
+                                window_start_ns
+                                if window_start_ns is not None
+                                else max(1, timestamp - 1)
+                            )
+                        ),
+                        "timeUnixNano": str(timestamp),
+                        "count": "1",
+                        "sum": 0.1 + index / 1_000,
+                        "min": 0.1 + index / 1_000,
+                        "max": 0.1 + index / 1_000,
+                        "bucketCounts": ["1", "0", "0", "0", "0"],
+                        "explicitBounds": [0.5, 1.0, 2.0, 5.0],
+                    }
+                    for index, timestamp in enumerate(timestamps)
+                ],
             },
         },
         {
             "name": "robotics.message.age",
             "unit": "ms",
-            "gauge": {
+            "histogram": {
+                "aggregationTemporality": 1,
                 "dataPoints": [
-                    {"timeUnixNano": "1500000000", "asDouble": 1.0},
-                ]
+                    {
+                        "startTimeUnixNano": "1000000000",
+                        "timeUnixNano": "2000000000",
+                        "count": "1",
+                        "sum": 1.0,
+                        "min": 1.0,
+                        "max": 1.0,
+                        "bucketCounts": ["0", "1", "0"],
+                        "explicitBounds": [0.5, 2.0],
+                    },
+                ],
             },
         },
         {
-            "name": "robotics.message.loss_ratio",
-            "unit": "1",
-            "gauge": {
+            "name": "robotics.message.received",
+            "unit": "{message}",
+            "sum": {
+                "aggregationTemporality": 1,
+                "isMonotonic": True,
                 "dataPoints": [
-                    {"timeUnixNano": "1500000000", "asDouble": 0.0},
-                ]
+                    {
+                        "startTimeUnixNano": "1000000000",
+                        "timeUnixNano": "2000000000",
+                        "asInt": "100",
+                        "attributes": [
+                            {
+                                "key": "sequence.measurement.method",
+                                "value": {
+                                    "stringValue": ("rmw_publication_sequence_single_publisher")
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+        {
+            "name": "robotics.message.lost",
+            "unit": "{message}",
+            "sum": {
+                "aggregationTemporality": 1,
+                "isMonotonic": True,
+                "dataPoints": [
+                    {
+                        "startTimeUnixNano": "1000000000",
+                        "timeUnixNano": "2000000000",
+                        "asInt": "0",
+                        "attributes": [
+                            {
+                                "key": "sequence.measurement.method",
+                                "value": {
+                                    "stringValue": ("rmw_publication_sequence_single_publisher")
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+        {
+            "name": "robotics.message.sequence_error",
+            "unit": "{message}",
+            "sum": {
+                "aggregationTemporality": 1,
+                "isMonotonic": True,
+                "dataPoints": [
+                    {
+                        "startTimeUnixNano": "1000000000",
+                        "timeUnixNano": "2000000000",
+                        "asInt": "0",
+                        "attributes": [
+                            {
+                                "key": "sequence.measurement.method",
+                                "value": {
+                                    "stringValue": ("rmw_publication_sequence_single_publisher")
+                                },
+                            }
+                        ],
+                    }
+                ],
             },
         },
         {
@@ -424,7 +531,7 @@ def test_verification_observes_without_starting_runtime(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "schema_version",
-    ["acceptance-scenario.v2", "acceptance-scenario.v3"],
+    ["acceptance-scenario.v2", "acceptance-scenario.v3", "acceptance-scenario.v4"],
 )
 def test_run_scoped_verification_requires_domain_and_run_context(
     tmp_path: Path,
@@ -563,6 +670,54 @@ def test_timing_policy_failure_emits_result_and_junit(tmp_path: Path) -> None:
     assert outputs.result["status"] == "failed"
     assert outputs.result_path.is_file()
     assert JUnitXml.fromfile(outputs.junit_path).failures == 1
+
+
+def test_valid_rmw_latency_does_not_hide_a_frozen_clock(tmp_path: Path) -> None:
+    bundle = _run_scoped_bundle(tmp_path)
+    metrics_path = tmp_path / "metrics.otlp.json"
+    _write_v2_metrics(
+        metrics_path,
+        timestamps=[1_000_000_000 + ((index + 1) * 1_000_000_000 // 30) for index in range(30)],
+        window_start_ns=1_000_000_000,
+    )
+    evidence_path = tmp_path / "evidence-index-v2.yaml"
+    _write_v2_evidence_index(evidence_path, metrics_path)
+    run_context_path = tmp_path / "acceptance-run.yaml"
+    _write_run_context(run_context_path, bundle)
+    clock = FakeTime()
+    observer = FakeObserver(clock, source_scale=0.0)
+    started = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+    lifecycle_timestamps = iter((started, started + timedelta(seconds=1)))
+    measurement_timestamps = iter((1_000_000_000, 2_000_000_000))
+
+    outputs = run_verification(
+        run_id=SIMULATION_RUN_ID,
+        domain_id="camera-domain",
+        run_context_path=run_context_path,
+        bundle=bundle,
+        evidence_index_path=evidence_path,
+        otel_metrics_path=metrics_path,
+        output_dir=tmp_path / "output",
+        observer_factory=lambda *_args, **_kwargs: observer,
+        now_ns=clock.now_ns,
+        wall_time_ns=lambda: next(measurement_timestamps),
+        sleep_fn=clock.sleep,
+        utc_now=lambda: next(lifecycle_timestamps),
+        poll_interval_sec=0.05,
+    )
+
+    authority = outputs.result["time_authority_observation"]
+    timing = next(
+        item
+        for item in outputs.result["assertion_results"]
+        if item["assertion_id"] == "time-policy"
+    )
+    assert outputs.result["schema_version"] == "acceptance-result.v4"
+    assert authority["within_policy"] is True
+    assert authority["p95_delivery_latency_ms"] > 0
+    assert timing["status"] == "failed"
+    assert outputs.result["clock_observation"]["real_time_factor"] == 0
+    assert outputs.result["status"] == "failed"
 
 
 def test_physical_verification_emits_canonical_result_from_verified_evidence(
