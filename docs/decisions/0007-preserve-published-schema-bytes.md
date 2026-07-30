@@ -18,7 +18,8 @@ software has changed.
 ## Decision Outcome
 
 Chosen option: published schema bytes are immutable. Incompatible or semantic
-changes use a new schema identifier, migration, and overlap period.
+changes use a new schema identifier. Versions overlap only while an active
+consumer requires both; historical tags retain unsupported versions.
 
 ## Consequences
 

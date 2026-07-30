@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
-from os import name as os_name
 from pathlib import Path
 from typing import Any
 
@@ -20,12 +19,13 @@ from robotics_acceptance_harness.forbidden_graph import ForbiddenGraphObservatio
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import GraphSnapshot, ReadinessResult
 from robotics_acceptance_harness.result import (
-    build_acceptance_result_v4,
-    write_result_json,
+    build_acceptance_result,
+    write_contract_json,
 )
 from robotics_acceptance_harness.time_authority import TimeAuthorityObservation
 from robotics_acceptance_harness.timing import TimingObservation
 from robotics_acceptance_harness.traces import TraceInputError
+from tests.support import acceptance_run, local_evidence_segment, write_evidence_index
 
 FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
 RUN_ID = "run-01234567-89ab-4def-8123-456789abcdef"
@@ -55,42 +55,17 @@ def result(
         tmp_path / f"metrics-{suffix}.json",
         {"domain_id": domain_id},
     )
-    evidence_payload = evidence_payload_path.read_bytes()
-    local_path = evidence_payload_path.resolve().as_posix()
-    if os_name == "nt":
-        local_path = f"/{local_path}"
-    evidence_digest = hashlib.sha256(evidence_payload).hexdigest()
-    evidence_path = write_json(
-        tmp_path / f"evidence-{suffix}.json",
-        {
-            "schema_version": "evidence-index.v2",
-            "run_id": RUN_ID,
-            "generated_at": "2026-07-26T12:00:00Z",
-            "finalized": True,
-            "policy_observation": {
-                "recording_mode": "bounded",
-                "compression": "zstd",
-                "upload_mode": "local_only",
-                "remote_sink_used": False,
-                "spool_peak_size_bytes": len(evidence_payload),
-                "upload_lag_max_sec": 0,
-            },
-            "segments": [
-                {
-                    "uri": evidence_payload_path.resolve().as_uri(),
-                    "local_path": local_path,
-                    "media_type": "application/x-ndjson",
-                    "sha256": evidence_digest,
-                    "size_bytes": len(evidence_payload),
-                    "retention_class": "pull-request-7d",
-                    "segment_index": 0,
-                    "upload_status": "local",
-                    "checksum_verified": True,
-                }
-            ],
-        },
+    segment = local_evidence_segment(
+        evidence_payload_path,
+        media_type="application/x-ndjson",
     )
-    document = build_acceptance_result_v4(
+    evidence_path = write_evidence_index(
+        tmp_path / f"evidence-{suffix}.json",
+        run_id=RUN_ID,
+        segments=[segment],
+        recording_mode="bounded",
+    )
+    document = build_acceptance_result(
         result_id=f"result-01234567-89ab-4def-8123-456789abcde{suffix}",
         run_id=RUN_ID,
         domain_id=domain_id,
@@ -99,7 +74,6 @@ def result(
         timing=TimingObservation(True, 0, 0, 1, 0, 0, 1),
         time_authority=TimeAuthorityObservation(
             "simulation-clock",
-            "delivery_latency",
             30,
             1,
             30,
@@ -108,7 +82,7 @@ def result(
             0,
             time_authority_within_policy,
         ),
-        time_authority_evidence_sha256=evidence_digest,
+        time_authority_evidence_sha256=segment["sha256"],
         assertions=(
             AssertionEvaluation(
                 assertion_id="domain-smoke",
@@ -129,8 +103,7 @@ def result(
         evidence_index=load_evidence_index(evidence_path),
         forbidden_graph=ForbiddenGraphObservation((), (), (), ()),
     )
-    assert document["schema_version"] == "acceptance-result.v4"
-    return write_result_json(document, tmp_path / f"result-{suffix}.json")
+    return write_contract_json(document, tmp_path / f"result-{suffix}.json")
 
 
 def run_context(tmp_path: Path) -> Path:
@@ -140,21 +113,17 @@ def run_context(tmp_path: Path) -> Path:
     )
     return write_json(
         tmp_path / "acceptance-run.json",
-        {
-            "schema_version": "acceptance-run.v1",
-            "run_id": RUN_ID,
-            "created_at": "2026-07-26T12:00:00Z",
-            "scenario_id": bundle.scenario.data["scenario_id"],
-            "scenario_sha256": bundle.scenario.sha256,
-            "time_authority": {
-                "kind": "sim_clock",
-                "source_id": "simulation-clock",
-            },
-            "domains": [
+        acceptance_run(
+            run_id=RUN_ID,
+            scenario_id=str(bundle.scenario.data["scenario_id"]),
+            scenario_sha256=bundle.scenario.sha256,
+            time_kind="sim_clock",
+            source_id="simulation-clock",
+            domains=[
                 {"domain_id": "camera-domain", "role": "sensor"},
                 {"domain_id": "control-domain", "role": "controller"},
             ],
-        },
+        ),
     )
 
 
@@ -165,7 +134,7 @@ def base_aggregate(tmp_path: Path, context_path: Path) -> Path:
             result(tmp_path, "camera-domain", "0"),
             result(tmp_path, "control-domain", "1"),
         ],
-        output_path=tmp_path / "aggregate-v1.json",
+        output_path=tmp_path / "domain-aggregate.json",
         aggregate_id="aggregate-01234567-89ab-4def-8123-456789abcdea",
         generated_at=datetime(2026, 7, 26, 12, 2, tzinfo=UTC),
     )
@@ -248,39 +217,17 @@ def trace_file(
 
 
 def trace_evidence_index(tmp_path: Path, domain_id: str, trace_path: Path) -> Path:
-    local_path = trace_path.resolve().as_posix()
-    if os_name == "nt":
-        local_path = f"/{local_path}"
-    payload = trace_path.read_bytes()
-    return write_json(
+    return write_evidence_index(
         tmp_path / f"{domain_id}.evidence.json",
-        {
-            "schema_version": "evidence-index.v2",
-            "run_id": RUN_ID,
-            "generated_at": "2026-07-26T12:00:00Z",
-            "finalized": True,
-            "policy_observation": {
-                "recording_mode": "bounded",
-                "compression": "zstd",
-                "upload_mode": "local_only",
-                "remote_sink_used": False,
-                "spool_peak_size_bytes": 0,
-                "upload_lag_max_sec": 0,
-            },
-            "segments": [
-                {
-                    "uri": trace_path.resolve().as_uri(),
-                    "local_path": local_path,
-                    "media_type": "application/x-ndjson",
-                    "sha256": hashlib.sha256(payload).hexdigest(),
-                    "size_bytes": len(payload),
-                    "retention_class": "pull-request-7d",
-                    "segment_index": 900000,
-                    "upload_status": "local",
-                    "checksum_verified": True,
-                }
-            ],
-        },
+        run_id=RUN_ID,
+        recording_mode="bounded",
+        segments=[
+            local_evidence_segment(
+                trace_path,
+                media_type="application/x-ndjson",
+                segment_index=900000,
+            )
+        ],
     )
 
 
@@ -417,7 +364,7 @@ def trace_aggregate(
             "control-domain": trace_evidence_index(tmp_path, "control-domain", consumer),
         },
         observation_output_dir=tmp_path / "observations",
-        output_path=tmp_path / "aggregate-v2.json",
+        output_path=tmp_path / "trace-aggregate.json",
         aggregate_id="aggregate-01234567-89ab-4def-8123-456789abcdef",
         generated_at=datetime(2026, 7, 26, 12, 3, tzinfo=UTC),
     )
@@ -477,27 +424,6 @@ def test_aggregate_requires_and_emits_every_registered_domain(tmp_path: Path) ->
         "control-domain",
     ]
     assert aggregate["cross_domain_e2e"]["status"] == "unevaluated"
-
-
-def test_aggregate_reads_legacy_v2_result_during_migration(tmp_path: Path) -> None:
-    context_path = run_context(tmp_path)
-    legacy_path = result(tmp_path, "camera-domain", "0")
-    legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
-    legacy["schema_version"] = "acceptance-result.v2"
-    authority = legacy["time_authority_observation"]
-    authority["p50_offset_ms"] = authority.pop("p50_delivery_latency_ms")
-    authority["p95_offset_ms"] = authority.pop("p95_delivery_latency_ms")
-    authority["max_offset_ms"] = authority.pop("max_delivery_latency_ms")
-    legacy["evidence"][0]["media_type"] = "application/json"
-    write_result_json(legacy, legacy_path)
-
-    output = aggregate_results(
-        run_context_path=context_path,
-        result_paths=[legacy_path, result(tmp_path, "control-domain", "1")],
-        output_path=tmp_path / "aggregate.json",
-    )
-
-    assert load_document(output).data["per_domain_aggregate"] == "passed"
 
 
 def test_aggregate_fails_when_registered_domain_has_no_result(tmp_path: Path) -> None:
@@ -579,7 +505,7 @@ def test_trace_aggregate_proves_span_link(tmp_path: Path) -> None:
         consumer_link=2,
     )
 
-    assert aggregate["schema_version"] == "acceptance-aggregate.v2"
+    assert aggregate["schema_version"] == "acceptance-aggregate.v3"
     assert aggregate["cross_domain_e2e"]["status"] == "passed"
     assert aggregate["causal_chains"][0]["root_trace_id"] == TRACE_ID
     assert aggregate["causal_chains"][0]["hops"][0]["relationship"] == "link"

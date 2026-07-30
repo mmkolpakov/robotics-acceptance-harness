@@ -271,12 +271,7 @@ def load_bundle(
 
     scenario = load_document(
         scenario_path,
-        expected_schemas={
-            "acceptance-scenario.v1",
-            "acceptance-scenario.v2",
-            "acceptance-scenario.v3",
-            "acceptance-scenario.v4",
-        },
+        expected_schemas={"acceptance-scenario.v4"},
         extension_schemas=extension_schemas,
     )
     if runtime_path is None:

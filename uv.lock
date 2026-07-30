@@ -528,7 +528,7 @@ wheels = [
 
 [[package]]
 name = "robotics-acceptance-harness"
-version = "0.11.0"
+version = "0.12.0"
 source = { editable = "." }
 dependencies = [
     { name = "junitparser" },
@@ -578,7 +578,7 @@ dev = [
 
 [[package]]
 name = "robotics-runtime-contracts"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "../robotics-runtime-contracts" }
 dependencies = [
     { name = "jsonschema", extra = ["format-nongpl"] },

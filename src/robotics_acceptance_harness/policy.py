@@ -231,17 +231,6 @@ def evaluate_evidence_policy(
 ) -> tuple[AssertionEvaluation, ...]:
     """Evaluate recording coverage and bounded-storage policy from v2 evidence."""
 
-    if evidence.index.schema_version != "evidence-index.v2":
-        return (
-            AssertionEvaluation(
-                assertion_id="evidence-index-version",
-                status="error",
-                observed_value=None,
-                unit="1",
-                message="evidence-index.v2 is required",
-            ),
-        )
-
     observation = evidence.index.data["policy_observation"]
     segments = evidence.index.data["segments"]
     summaries = evidence.mcap_summaries

@@ -14,6 +14,7 @@ from robotics_acceptance_harness.aggregate import (
 )
 from robotics_acceptance_harness.application import explain_bundle, run_verification
 from robotics_acceptance_harness.documents import DocumentBundle, load_bundle
+from robotics_acceptance_harness.run_context import create_run_context
 
 
 def _add_bundle_arguments(parser: argparse.ArgumentParser) -> None:
@@ -73,6 +74,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    create_run = subparsers.add_parser(
+        "create-run",
+        help="Create a validated acceptance-run.v1 context.",
+    )
+    create_run.add_argument("--scenario", required=True, metavar="PATH")
+    create_run.add_argument("--output", required=True, metavar="PATH")
+    create_run.add_argument("--domain", action="append", required=True, metavar="ID=ROLE")
+    create_run.add_argument("--time-authority", required=True, metavar="KIND")
+    create_run.add_argument("--time-source", required=True, metavar="ID")
+    create_run.add_argument("--run-id", metavar="RUN_ID")
+
     explain = subparsers.add_parser("explain", help="Validate and explain an execution bundle.")
     _add_bundle_arguments(explain)
 
@@ -81,19 +93,28 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--run-id", required=True, metavar="RUN_ID")
     verify.add_argument(
         "--domain-id",
+        required=True,
         metavar="DOMAIN_ID",
-        help="Required for acceptance-scenario.v2/v3; omitted for v1.",
+        help="Domain identifier declared by the acceptance run.",
     )
     verify.add_argument(
         "--run-context",
+        required=True,
         metavar="PATH",
-        help="Required for acceptance-scenario.v2/v3; omitted for v1.",
+        help="Validated acceptance-run.v1 context.",
     )
     verify.add_argument("--evidence-index", required=True, metavar="PATH")
     verify.add_argument(
         "--otel-metrics",
+        required=True,
         metavar="PATH",
         help="Newline-delimited OTLP JSON from the OpenTelemetry Collector file exporter.",
+    )
+    verify.add_argument(
+        "--measurement-complete",
+        required=True,
+        metavar="PATH",
+        help="Atomically create a marker after the measurement window closes.",
     )
     verify.add_argument("--output", required=True, metavar="DIR")
 
@@ -139,16 +160,16 @@ def _extension_schemas(values: Sequence[str]) -> Mapping[str, bytes]:
     return schemas
 
 
-def _domain_paths(values: Sequence[str], option: str) -> Mapping[str, str]:
-    paths: dict[str, str] = {}
+def _keyed_values(values: Sequence[str], option: str) -> Mapping[str, str]:
+    parsed: dict[str, str] = {}
     for value in values:
-        domain_id, separator, path = value.partition("=")
-        if not separator or not domain_id or not path:
+        key, separator, item = value.partition("=")
+        if not separator or not key or not item:
             raise ValueError(f"invalid {option} value: {value!r}")
-        if domain_id in paths:
-            raise ValueError(f"duplicate {option} domain: {domain_id}")
-        paths[domain_id] = path
-    return paths
+        if key in parsed:
+            raise ValueError(f"duplicate {option} key: {key}")
+        parsed[key] = item
+    return parsed
 
 
 def _bundle(arguments: argparse.Namespace) -> DocumentBundle:
@@ -167,6 +188,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
+        if arguments.command == "create-run":
+            run_id = create_run_context(
+                arguments.scenario,
+                arguments.output,
+                domains=_keyed_values(arguments.domain, "--domain"),
+                time_authority=arguments.time_authority,
+                time_source=arguments.time_source,
+                run_id=arguments.run_id,
+            )
+            print(run_id)
+            return 0
+
         if arguments.command == "aggregate":
             output = aggregate_results(
                 run_context_path=arguments.run_context,
@@ -184,8 +217,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 base_aggregate_path=arguments.base_aggregate,
                 causal_chain_paths=arguments.causal_chain,
                 channel_contract_paths=arguments.channel_contract,
-                trace_paths=_domain_paths(arguments.trace, "--trace"),
-                evidence_index_paths=_domain_paths(
+                trace_paths=_keyed_values(arguments.trace, "--trace"),
+                evidence_index_paths=_keyed_values(
                     arguments.evidence_index,
                     "--evidence-index",
                 ),
@@ -202,8 +235,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_id=arguments.run_id,
                 causal_chain_paths=arguments.causal_chain,
                 channel_contract_paths=arguments.channel_contract,
-                trace_paths=_domain_paths(arguments.trace, "--trace"),
-                evidence_index_paths=_domain_paths(
+                trace_paths=_keyed_values(arguments.trace, "--trace"),
+                evidence_index_paths=_keyed_values(
                     arguments.evidence_index,
                     "--evidence-index",
                 ),
@@ -232,6 +265,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             bundle=bundle,
             evidence_index_path=arguments.evidence_index,
             otel_metrics_path=arguments.otel_metrics,
+            measurement_complete_path=arguments.measurement_complete,
             output_dir=arguments.output,
         )
         print(

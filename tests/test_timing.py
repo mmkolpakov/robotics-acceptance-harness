@@ -28,7 +28,7 @@ def test_backwards_clock_is_rejected_in_every_mode() -> None:
     with pytest.raises(TimingValidationError, match="moved backwards"):
         evaluate_timing(
             {"time_mode": "simulation_stepped"},
-            {"step_size_sec": 0.001},
+            {"step_size_sec": 0.001, "max_skipped_steps": 0},
             samples,
         )
 
@@ -67,21 +67,6 @@ def test_stepped_timing_ignores_repeated_clock_publications() -> None:
     assert result.monotonic
 
 
-def test_legacy_stepped_policy_uses_fixed_compatibility_budget() -> None:
-    samples = [
-        ClockSample(0, 0),
-        ClockSample(1_000_000, 2_000_000),
-    ]
-
-    result = evaluate_timing(
-        {"time_mode": "simulation_stepped"},
-        {"step_size_sec": 0.001},
-        samples,
-    )
-
-    assert result.monotonic
-
-
 def test_stepped_timing_rejects_clock_that_only_repeats() -> None:
     samples = [
         ClockSample(0, 1_000_000),
@@ -91,7 +76,7 @@ def test_stepped_timing_rejects_clock_that_only_repeats() -> None:
     with pytest.raises(TimingValidationError, match="stepped clock did not advance"):
         evaluate_timing(
             {"time_mode": "simulation_stepped"},
-            {"step_size_sec": 0.001},
+            {"step_size_sec": 0.001, "max_skipped_steps": 0},
             samples,
         )
 

@@ -1,12 +1,52 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from robotics_acceptance_harness.documents import (
     BundleValidationError,
     LoadedDocument,
     load_document,
 )
+from robotics_acceptance_harness.result import write_contract_json
+
+
+def create_run_context(
+    scenario_path: str | Path,
+    output_path: str | Path,
+    *,
+    domains: Mapping[str, str],
+    time_authority: str,
+    time_source: str,
+    run_id: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    """Create and validate the immutable context for one acceptance run."""
+
+    scenario = load_document(
+        scenario_path,
+        expected_schemas={"acceptance-scenario.v4"},
+    )
+    resolved_run_id = run_id or f"run-{uuid4()}"
+    created_at = (now or datetime.now(UTC)).astimezone(UTC)
+    document = {
+        "schema_version": "acceptance-run.v1",
+        "run_id": resolved_run_id,
+        "created_at": created_at.isoformat().replace("+00:00", "Z"),
+        "scenario_id": scenario.data["scenario_id"],
+        "scenario_sha256": scenario.sha256,
+        "time_authority": {
+            "kind": time_authority,
+            "source_id": time_source,
+        },
+        "domains": [
+            {"domain_id": domain_id, "role": role} for domain_id, role in sorted(domains.items())
+        ],
+    }
+    write_contract_json(document, output_path)
+    return resolved_run_id
 
 
 def load_run_context(
@@ -38,4 +78,4 @@ def load_run_context(
     return context
 
 
-__all__ = ["load_run_context"]
+__all__ = ["create_run_context", "load_run_context"]

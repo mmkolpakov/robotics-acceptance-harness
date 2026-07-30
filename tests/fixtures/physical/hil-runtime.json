@@ -37,8 +37,8 @@
   },
   "authorization": {
     "mode": "verified_execution_permit",
-    "permit_sha256": "28d40374f91cad0c73886796671c0a90a99c3ac4edb10256b21c5bb14b74e270",
-    "execution_verification_sha256": "ab7bd8048ed4a9bdd8b71bb5087f5dc9dff67eb10d504991ac82e14955ceae73",
+    "permit_sha256": "80eb07e5a0f5545197125d07d97481cd2865fd67f3c7757342e3917b86d74314",
+    "execution_verification_sha256": "8abbf6d9bc3c831eaf4838446e636d970c283b2de286d8db76fc75b777c7a930",
     "trust_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "data_plane": {

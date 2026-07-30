@@ -3,8 +3,6 @@ from __future__ import annotations
 from robotics_acceptance_harness.metrics import HistogramSample, MetricSample
 from robotics_acceptance_harness.time_authority import (
     DELIVERY_LATENCY_METRIC,
-    INDEPENDENT_CLOCK_OFFSET_METHOD,
-    LEGACY_OFFSET_METRIC,
     METHOD_ATTRIBUTE,
     RMW_LATENCY_METHOD,
     evaluate_time_authority,
@@ -68,7 +66,6 @@ def test_time_authority_uses_attributed_measurement_window() -> None:
 
     assert observation.sample_count == 30
     assert observation.within_policy
-    assert observation.measurement_kind == "delivery_latency"
     assert observation.p50_ms < observation.p95_ms
 
 
@@ -87,8 +84,8 @@ def test_time_authority_fails_when_sample_count_is_short() -> None:
     assert not observation.within_policy
 
 
-def test_time_authority_rejects_legacy_gauge_but_allows_stable_histogram() -> None:
-    legacy = [
+def test_time_authority_rejects_scalar_gauge_but_allows_histogram() -> None:
+    gauges = [
         MetricSample(
             DELIVERY_LATENCY_METRIC,
             0,
@@ -105,9 +102,9 @@ def test_time_authority_rejects_legacy_gauge_but_allows_stable_histogram() -> No
     ]
     stable = [histogram_sample(0.5, index + 2) for index in range(30)]
 
-    legacy_observation = evaluate_time_authority(
+    gauge_observation = evaluate_time_authority(
         policy(),
-        legacy,
+        gauges,
         run_id=RUN_ID,
         domain_id="camera-domain",
         source_id="simulation-clock",
@@ -124,8 +121,8 @@ def test_time_authority_rejects_legacy_gauge_but_allows_stable_histogram() -> No
         window_end_ns=31,
     )
 
-    assert legacy_observation.sample_count == 0
-    assert not legacy_observation.within_policy
+    assert gauge_observation.sample_count == 0
+    assert not gauge_observation.within_policy
     assert stable_observation.sample_count == 30
     assert stable_observation.within_policy
 
@@ -165,78 +162,3 @@ def test_time_authority_counts_histogram_events() -> None:
     assert observation.p50_ms == 1
     assert observation.p95_ms == 1.9
     assert observation.within_policy
-
-
-def test_legacy_policy_requires_independent_clock_offset_measurements() -> None:
-    legacy_policy = {
-        "time_authority_min_samples": 3,
-        "max_clock_offset_p50_ms": 1,
-        "max_clock_offset_p95_ms": 2,
-        "max_clock_offset_ms": 5,
-    }
-    attributes = {
-        "run.id": RUN_ID,
-        "domain.id": "camera-domain",
-        "time.source.id": "simulation-clock",
-        METHOD_ATTRIBUTE: INDEPENDENT_CLOCK_OFFSET_METHOD,
-    }
-    offset_samples = [
-        MetricSample(
-            LEGACY_OFFSET_METRIC,
-            value,
-            "ms",
-            index,
-            attributes,
-        )
-        for index, value in enumerate((-0.5, 1.0, -1.5), start=1)
-    ]
-
-    observation = evaluate_time_authority(
-        legacy_policy,
-        offset_samples,
-        run_id=RUN_ID,
-        domain_id="camera-domain",
-        source_id="simulation-clock",
-        window_start_ns=1,
-        window_end_ns=3,
-    )
-
-    assert observation.measurement_kind == "clock_offset"
-    assert observation.sample_count == 3
-    assert observation.p50_ms == 1
-    assert observation.max_ms == 1.5
-    assert observation.within_policy
-
-
-def test_legacy_policy_rejects_rmw_latency_as_clock_offset() -> None:
-    legacy_policy = {
-        "time_authority_min_samples": 1,
-        "max_clock_offset_p50_ms": 1,
-        "max_clock_offset_p95_ms": 2,
-        "max_clock_offset_ms": 5,
-    }
-    sample = MetricSample(
-        LEGACY_OFFSET_METRIC,
-        0.1,
-        "ms",
-        1,
-        {
-            "run.id": RUN_ID,
-            "domain.id": "camera-domain",
-            "time.source.id": "simulation-clock",
-            METHOD_ATTRIBUTE: RMW_LATENCY_METHOD,
-        },
-    )
-
-    observation = evaluate_time_authority(
-        legacy_policy,
-        [sample],
-        run_id=RUN_ID,
-        domain_id="camera-domain",
-        source_id="simulation-clock",
-        window_start_ns=1,
-        window_end_ns=1,
-    )
-
-    assert observation.sample_count == 0
-    assert not observation.within_policy
