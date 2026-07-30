@@ -135,7 +135,7 @@ def load_evidence_index(
     try:
         document = load_document(
             path,
-            expected_schemas={"evidence-index.v1", "evidence-index.v2"},
+            expected_schemas={"evidence-index.v2"},
         )
     except BundleValidationError as error:
         raise EvidenceValidationError(error.json_path, error.validation_message) from error
@@ -155,10 +155,7 @@ def load_evidence_index(
             links.append(link)
         else:
             links.append(_remote_link(segment, index))
-        if (
-            document.schema_version == "evidence-index.v2"
-            and segment["media_type"] == "application/mcap"
-        ):
+        if segment["media_type"] == "application/mcap":
             summaries.append(_local_summary(segment, index))
     return VerifiedEvidence(
         document,

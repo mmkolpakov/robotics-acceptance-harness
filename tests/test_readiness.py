@@ -11,6 +11,7 @@ from robotics_acceptance_harness.readiness import (
     evaluate_graph,
     wait_for_readiness,
 )
+from tests.support import FakeTime
 
 
 def expected_graph() -> dict[str, object]:
@@ -177,17 +178,6 @@ class FakeObserver:
 
     def close(self) -> None:
         return None
-
-
-class FakeTime:
-    def __init__(self) -> None:
-        self.value_ns = 0
-
-    def now_ns(self) -> int:
-        return self.value_ns
-
-    def sleep(self, seconds: float) -> None:
-        self.value_ns += int(seconds * 1_000_000_000)
 
 
 def test_readiness_requires_an_uninterrupted_stability_window() -> None:

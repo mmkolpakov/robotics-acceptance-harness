@@ -58,11 +58,7 @@ def aggregate_results(
     results = [
         load_document(
             path,
-            expected_schemas={
-                "acceptance-result.v2",
-                "acceptance-result.v3",
-                "acceptance-result.v4",
-            },
+            expected_schemas={"acceptance-result.v4"},
         )
         for path in resolved_result_paths
     ]
@@ -100,7 +96,7 @@ def aggregate_results(
 
     aggregate_status = _domain_aggregate({str(item.data["status"]) for item in results})
     aggregate: dict[str, Any] = {
-        "schema_version": "acceptance-aggregate.v1",
+        "schema_version": "acceptance-aggregate.v3",
         "aggregate_id": aggregate_id or f"aggregate-{uuid4()}",
         "run_id": context.data["run_id"],
         "acceptance_run_sha256": context.sha256,
@@ -235,7 +231,7 @@ def _evaluate_trace(
         else None
     )
     base = (
-        load_document(base_aggregate_path, expected_schemas={"acceptance-aggregate.v1"})
+        load_document(base_aggregate_path, expected_schemas={"acceptance-aggregate.v3"})
         if base_aggregate_path is not None
         else None
     )
@@ -522,7 +518,7 @@ def _evaluate_trace(
         return write_contract_json(result, output_path)
 
     aggregate: dict[str, Any] = {
-        "schema_version": "acceptance-aggregate.v2",
+        "schema_version": "acceptance-aggregate.v3",
         "aggregate_id": aggregate_id or f"aggregate-{uuid4()}",
         "run_id": base.data["run_id"],
         "acceptance_run_sha256": base.data["acceptance_run_sha256"],

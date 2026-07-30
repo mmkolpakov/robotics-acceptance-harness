@@ -684,27 +684,6 @@ def counter_window_aggregate(
     return CounterWindowAggregate(total=total, coverage=ordered_coverage)
 
 
-def counter_delta_total(
-    samples: Sequence[MetricPoint],
-    metric_name: str,
-    *,
-    attribute_match: Mapping[str, MetricAttribute],
-    expected_unit: str,
-    window_start_ns: int,
-    window_end_ns: int,
-) -> float:
-    """Return the monotonic Sum increase inside an evaluation window."""
-
-    return counter_window_aggregate(
-        samples,
-        metric_name,
-        attribute_match=attribute_match,
-        expected_unit=expected_unit,
-        window_start_ns=window_start_ns,
-        window_end_ns=window_end_ns,
-    ).total
-
-
 def _compare(operator: str, observed: float | int, threshold: float) -> bool:
     comparisons = {
         "lt": observed < threshold,
@@ -906,7 +885,6 @@ __all__ = [
     "METRIC_WINDOW_COVERAGE_TOLERANCE_NS",
     "METRIC_WINDOW_MAX_UNCOVERED_FRACTION",
     "aggregate_metric_points",
-    "counter_delta_total",
     "counter_window_aggregate",
     "evaluate_metric_assertions",
     "histogram_window_coverage",

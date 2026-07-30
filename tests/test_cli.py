@@ -26,8 +26,40 @@ def test_explain_validates_bundle_without_ros(capsys) -> None:
     assert exit_code == 0
     assert output["policy"] == "accepted-simulation"
     assert output["workload_kind"] == "none"
-    assert "$.data_plane_policy.max_loss_ratio" in output["unevaluated"]
-    assert "$.evidence_policy.topics" in output["unevaluated"]
+    assert output["unevaluated"] == []
+
+
+def test_create_run_derives_identity_and_digest_from_scenario(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = "run-6ba7b810-9dad-41d1-80b4-00c04fd430c8"
+    output_path = tmp_path / "acceptance-run.json"
+
+    exit_code = main(
+        [
+            "create-run",
+            "--scenario",
+            str(FIXTURES / "scenario.yaml"),
+            "--output",
+            str(output_path),
+            "--domain",
+            "primary=observer",
+            "--time-authority",
+            "sim_clock",
+            "--time-source",
+            "gazebo-clock",
+            "--run-id",
+            run_id,
+        ]
+    )
+
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == run_id
+    assert document["scenario_id"] == "org.example.physics-smoke"
+    assert document["scenario_sha256"]
+    assert document["domains"] == [{"domain_id": "primary", "role": "observer"}]
 
 
 def test_explain_rejects_invalid_extension_argument(capsys) -> None:
@@ -67,7 +99,7 @@ def test_verify_requires_run_id(capsys) -> None:
     assert "--run-id" in capsys.readouterr().err
 
 
-def test_v1_verify_does_not_require_domain_or_run_context(
+def test_verify_forwards_canonical_run_inputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -96,16 +128,26 @@ def test_v1_verify_does_not_require_domain_or_run_context(
             str(FIXTURES / "runtime.yaml"),
             "--run-id",
             "run-6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+            "--domain-id",
+            "camera-domain",
+            "--run-context",
+            "acceptance-run.yaml",
             "--evidence-index",
             "evidence-index.yaml",
+            "--otel-metrics",
+            "metrics.otlp.json",
+            "--measurement-complete",
+            str(tmp_path / "measurement-complete"),
             "--output",
             str(tmp_path),
         ]
     )
 
     assert exit_code == 0
-    assert captured["domain_id"] is None
-    assert captured["run_context_path"] is None
+    assert captured["domain_id"] == "camera-domain"
+    assert captured["run_context_path"] == "acceptance-run.yaml"
+    assert captured["otel_metrics_path"] == "metrics.otlp.json"
+    assert captured["measurement_complete_path"] == str(tmp_path / "measurement-complete")
     assert json.loads(capsys.readouterr().out)["status"] == "passed"
 
 

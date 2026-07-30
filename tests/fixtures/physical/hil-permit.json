@@ -2,7 +2,7 @@
   "schema_version": "execution-permit.v1",
   "predicate_type": "https://robotics-runtime-contracts.dev/attestations/execution-permit/v1",
   "permit_id": "org.example.hil-permit-001",
-  "scenario_sha256": "be20351ee35969362d16b0c69334c0afc246517c6519724741210b1c8cac8945",
+  "scenario_sha256": "c9fec5fcc247b74f8ccffe79d9a3b1e01e99679e725b5f86174bbca6be3ee086",
   "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "trust_policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "target": {

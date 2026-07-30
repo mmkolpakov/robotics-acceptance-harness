@@ -50,6 +50,7 @@ published by
 
 | Goal | Interface | Starts or controls the system |
 | --- | --- | --- |
+| Create an immutable run context | `robotics-acceptance create-run` | No |
 | Validate and explain an execution bundle | `robotics-acceptance explain` | No |
 | Observe a running execution and decide a verdict | `robotics-acceptance verify` | No |
 | Aggregate the complete set of domain results | `robotics-acceptance aggregate` | No |
@@ -62,10 +63,10 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts>=0.10.0,<0.11` |
-| Scenarios | Reads `acceptance-scenario.v1` through `v4`; canonical run-scoped input is `v4` |
-| Results | Reads `acceptance-result.v1` through `v4`; writes run-scoped `v4` |
-| Aggregates | `acceptance-aggregate.v1`, `acceptance-aggregate.v2` |
+| Contracts | `robotics-runtime-contracts>=0.11.0,<0.12` |
+| Scenarios | `acceptance-scenario.v4` |
+| Results | `acceptance-result.v4` |
+| Aggregates | `acceptance-aggregate.v3` |
 | Transport qualification | `transport-qualification-result.v1` |
 | ROS observation | ROS 2 Jazzy with `rclpy` and declared message packages |
 | Metrics | Newline-delimited OTLP JSON from the Collector file exporter |
@@ -121,6 +122,7 @@ robotics-acceptance verify \
   --run-context /run/robotics/acceptance-run.json \
   --evidence-index /run/robotics/evidence-index.json \
   --otel-metrics /run/robotics/metrics.otlp.json \
+  --measurement-complete /run/robotics/measurement-complete \
   --output /run/robotics/results
 ```
 
@@ -132,12 +134,9 @@ invalid input or an observation error. Outputs are written atomically:
 /run/robotics/results/junit.xml
 ```
 
-The OTLP file is accepted only when the finalized evidence index covers its
-exact path, media type, byte size, and SHA-256 digest.
-
-`--domain-id` and `--run-context` are required for
-`acceptance-scenario.v2` through `acceptance-scenario.v4`. A v1 scenario omits
-both options; `--run-id` remains required for every verification.
+The recorder finalizes its evidence index only after the harness creates
+`--measurement-complete`. The OTLP file is accepted only when that index covers
+its exact path, media type, byte size, and SHA-256 digest.
 
 ## Aggregate Results
 
@@ -172,15 +171,15 @@ channel contract.
 
 | Input | Required when | Contract |
 | --- | --- | --- |
-| Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v1` through `.v4` |
+| Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v4` |
 | Runtime manifest | `explain`, `verify`, pytest | `runtime-manifest.v1` |
 | Model manifest | Inference workload | `model-artifact-manifest.v1` |
 | Dataset manifest | MCAP playback | `dataset-manifest.v1` |
 | Execution permit | HIL or real target | `execution-permit.v1` |
 | Verification record | HIL or real target | `execution-verification.v1` |
-| Evidence index | `verify` | `evidence-index.v1` or `.v2` |
+| Evidence index | `verify` | `evidence-index.v2` |
 | Metrics | Metric assertions or physical observation | OTLP JSON |
-| Run context | v2-v4 `verify`, `aggregate`, `trace-evaluate` | `acceptance-run.v1` |
+| Run context | `verify`, `aggregate`, `trace-evaluate` | `acceptance-run.v1` |
 | Channel and causal-chain contracts | `trace-evaluate`, `transport-evaluate` | `zenoh-channel.v1`, `causal-chain.v1` |
 
 Local domain extensions remain explicit and digest-pinned:
@@ -237,7 +236,7 @@ the conservative bound appropriate for the assertion direction. Missing,
 duplicate, or non-monotonic DDS publication sequence metadata fails the
 data-plane integrity assertion.
 
-The v4 contract names this measurement as delivery latency. It does not validate
+The result contract names this measurement as delivery latency. It does not validate
 the `/clock` payload or hardware clock synchronization. The observer separately
 checks payload monotonicity, advancement, configured step multiples, and
 real-time factor; HIL observation uses dedicated hardware clock-offset metrics.

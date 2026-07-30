@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-from hashlib import sha256
-from os import name as os_name
 from pathlib import Path
 
 from robotics_acceptance_harness.evidence import load_evidence_index
@@ -17,90 +14,22 @@ from robotics_acceptance_harness.policy import (
     evaluate_data_plane_policy,
     evaluate_evidence_policy,
 )
+from tests.support import local_mcap_segment, write_evidence_index
 
 RUN_ID = "run-01234567-89ab-4def-8123-456789abcdef"
 
 
-def local_path(path: Path) -> str:
-    value = path.as_posix()
-    return f"/{value}" if os_name == "nt" else value
-
-
 def evidence(tmp_path: Path, *, topic: str = "/camera/image"):
-    segment = tmp_path / "run_0.mcap"
-    segment.write_bytes(b"mcap")
-    segment_sha = sha256(segment.read_bytes()).hexdigest()
-    summary = tmp_path / "run_0.mcap-summary.json"
-    summary.write_text(
-        json.dumps(
-            {
-                "schema_version": "mcap-summary.v1",
-                "source_sha256": segment_sha,
-                "compressions": ["zstd"],
-                "statistics": {
-                    "message_count": 10,
-                    "schema_count": 1,
-                    "channel_count": 1,
-                    "attachment_count": 0,
-                    "metadata_count": 1,
-                    "chunk_count": 1,
-                    "message_start_time_ns": 1,
-                    "message_end_time_ns": 2_000_000_001,
-                },
-                "channels": [
-                    {
-                        "topic": topic,
-                        "message_encoding": "cdr",
-                        "schema_name": "sensor_msgs/msg/Image",
-                        "message_count": 10,
-                    }
-                ],
-            },
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    index = tmp_path / "evidence-index.json"
-    index.write_text(
-        json.dumps(
-            {
-                "schema_version": "evidence-index.v2",
-                "run_id": RUN_ID,
-                "generated_at": "2026-07-26T12:00:00Z",
-                "finalized": True,
-                "policy_observation": {
-                    "recording_mode": "bounded",
-                    "compression": "zstd",
-                    "upload_mode": "local_only",
-                    "remote_sink_used": False,
-                    "spool_peak_size_bytes": 4,
-                    "upload_lag_max_sec": 0,
-                },
-                "segments": [
-                    {
-                        "uri": segment.as_uri(),
-                        "local_path": local_path(segment),
-                        "media_type": "application/mcap",
-                        "sha256": segment_sha,
-                        "size_bytes": segment.stat().st_size,
-                        "retention_class": "pull-request-7d",
-                        "segment_index": 0,
-                        "upload_status": "local",
-                        "checksum_verified": True,
-                        "mcap_summary": {
-                            "uri": summary.as_uri(),
-                            "sha256": sha256(summary.read_bytes()).hexdigest(),
-                            "size_bytes": summary.stat().st_size,
-                            "media_type": "application/vnd.robotics.mcap-summary.v1+json",
-                        },
-                    }
-                ],
-            },
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
+    index = write_evidence_index(
+        tmp_path / "evidence-index.json",
+        run_id=RUN_ID,
+        recording_mode="bounded",
+        segments=[
+            local_mcap_segment(
+                tmp_path / "run_0.mcap",
+                topics={topic: "sensor_msgs/msg/Image"},
+            )
+        ],
     )
     return load_evidence_index(index)
 
@@ -118,6 +47,20 @@ def evidence_policy() -> dict[str, object]:
         "upload_mode": "local_only",
         "retention_class": "pull-request-7d",
         "remote_sink_allowed": False,
+    }
+
+
+def data_plane_policy(
+    *,
+    max_loss_ratio: float = 0,
+    shm_transport: bool = False,
+) -> dict[str, object]:
+    return {
+        "max_message_age_ms": 100,
+        "max_loss_ratio": max_loss_ratio,
+        "shm_transport": shm_transport,
+        "data_sharing": False,
+        "private_ipc": True,
     }
 
 
@@ -197,13 +140,7 @@ def test_evidence_policy_fails_when_required_channel_is_absent(tmp_path: Path) -
 
 
 def test_data_plane_policy_checks_static_transport_and_attributed_metrics() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0,
-        "shm_transport": True,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy(shm_transport=True)
     runtime = {
         "data_plane": {
             "shm_transport": True,
@@ -237,13 +174,7 @@ def test_data_plane_policy_checks_static_transport_and_attributed_metrics() -> N
 
 
 def test_data_plane_loss_is_derived_from_delta_counters() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0.1,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy(max_loss_ratio=0.1)
     runtime = {"data_plane": dict(policy)}
     samples = [
         message_age(5, 2),
@@ -270,13 +201,7 @@ def test_data_plane_loss_is_derived_from_delta_counters() -> None:
 
 
 def test_data_plane_rejects_overlapping_or_misaligned_counter_intervals() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0.1,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy(max_loss_ratio=0.1)
     runtime = {"data_plane": dict(policy)}
     common = [
         message_age(5, 2),
@@ -325,13 +250,7 @@ def test_data_plane_rejects_overlapping_or_misaligned_counter_intervals() -> Non
 
 
 def test_data_plane_rejects_a_short_sample_inside_a_long_measurement_window() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy()
     runtime = {"data_plane": dict(policy)}
     start_ns = 20_000_000_000
     end_ns = 21_000_000_000
@@ -379,13 +298,7 @@ def test_data_plane_rejects_a_short_sample_inside_a_long_measurement_window() ->
 
 
 def test_data_plane_loss_uses_cumulative_counter_baselines() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0.1,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy(max_loss_ratio=0.1)
     runtime = {"data_plane": dict(policy)}
     samples = [
         message_age(5, 3, start_time_ns=2),
@@ -448,13 +361,7 @@ def test_data_plane_loss_uses_cumulative_counter_baselines() -> None:
 
 
 def test_data_plane_cumulative_counters_survive_process_reset() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0.1,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy(max_loss_ratio=0.1)
     runtime = {"data_plane": dict(policy)}
     samples = [
         message_age(5, 5),
@@ -517,13 +424,7 @@ def test_data_plane_cumulative_counters_survive_process_reset() -> None:
 
 
 def test_data_plane_rejects_last_value_ratio_and_empty_counters() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy()
     runtime = {"data_plane": dict(policy)}
     common = [
         message_age(5, 1),
@@ -536,7 +437,7 @@ def test_data_plane_rejects_last_value_ratio_and_empty_counters() -> None:
         ),
     ]
 
-    legacy = evaluate_data_plane_policy(
+    last_value = evaluate_data_plane_policy(
         policy,
         runtime,
         common,
@@ -558,22 +459,18 @@ def test_data_plane_rejects_last_value_ratio_and_empty_counters() -> None:
         window_end_ns=1,
     )
 
-    legacy_loss = next(item for item in legacy if item.assertion_id == "data-plane-loss-ratio")
+    last_value_loss = next(
+        item for item in last_value if item.assertion_id == "data-plane-loss-ratio"
+    )
     empty_loss = next(item for item in empty if item.assertion_id == "data-plane-loss-ratio")
-    assert legacy_loss.status == "error"
-    assert "robotics.message.received" in legacy_loss.message
+    assert last_value_loss.status == "error"
+    assert "robotics.message.received" in last_value_loss.message
     assert empty_loss.status == "error"
     assert "no observations" in empty_loss.message
 
 
 def test_data_plane_rejects_ambiguous_channels_and_wrong_counter_units() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy()
     runtime = {"data_plane": dict(policy)}
     base = [
         message_age(5, 1),
@@ -616,14 +513,8 @@ def test_data_plane_rejects_ambiguous_channels_and_wrong_counter_units() -> None
     assert "requires unit {message}" in wrong_loss.message
 
 
-def test_data_plane_rejects_legacy_message_age_gauge() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+def test_data_plane_rejects_message_age_gauge() -> None:
+    policy = data_plane_policy()
     runtime = {"data_plane": dict(policy)}
     evaluations = evaluate_data_plane_policy(
         policy,
@@ -656,13 +547,7 @@ def test_data_plane_rejects_legacy_message_age_gauge() -> None:
 
 
 def test_data_plane_sequence_integrity_fails_on_invalid_metadata() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy()
     runtime = {"data_plane": dict(policy)}
 
     evaluations = evaluate_data_plane_policy(
@@ -687,13 +572,7 @@ def test_data_plane_sequence_integrity_fails_on_invalid_metadata() -> None:
 
 
 def test_data_plane_rejects_an_unqualified_sequence_measurement_method() -> None:
-    policy = {
-        "max_message_age_ms": 100,
-        "max_loss_ratio": 0,
-        "shm_transport": False,
-        "data_sharing": False,
-        "private_ipc": True,
-    }
+    policy = data_plane_policy()
     runtime = {"data_plane": dict(policy)}
 
     evaluations = evaluate_data_plane_policy(
