@@ -67,6 +67,27 @@ def span(
     )
 
 
+def duplicated_delivery_spans() -> dict[str, list[TraceSpan]]:
+    producer = span(
+        domain_id="source",
+        name="publish",
+        span_index=1,
+        message_id="message-1",
+        start_ns=10 * SECOND_NS,
+    )
+    consumers = [
+        span(
+            domain_id="destination",
+            name="receive",
+            span_index=index,
+            message_id="message-1",
+            start_ns=10 * SECOND_NS + index * 10_000,
+        )
+        for index in (2, 3)
+    ]
+    return {"source": [producer], "destination": consumers}
+
+
 def test_duplicate_producer_ids_fail_closed_without_losing_counts() -> None:
     producers = [
         span(
@@ -152,27 +173,9 @@ def test_emitted_channel_errors_serialize_through_the_public_contract(tmp_path: 
 
 
 def test_duplicate_consumers_are_counted_against_delivery_policy() -> None:
-    producer = span(
-        domain_id="source",
-        name="publish",
-        span_index=1,
-        message_id="message-1",
-        start_ns=10 * SECOND_NS,
-    )
-    consumers = [
-        span(
-            domain_id="destination",
-            name="receive",
-            span_index=index,
-            message_id="message-1",
-            start_ns=10 * SECOND_NS + index * 10_000,
-        )
-        for index in (2, 3)
-    ]
-
     observation = evaluate_channel_delivery(
         channel_contract(),
-        {"source": [producer], "destination": consumers},
+        duplicated_delivery_spans(),
     )
 
     assert observation.status == "failed"
@@ -184,27 +187,9 @@ def test_duplicate_consumers_are_counted_against_delivery_policy() -> None:
 
 
 def test_known_delivery_failure_has_priority_over_insufficient_messages() -> None:
-    producer = span(
-        domain_id="source",
-        name="publish",
-        span_index=1,
-        message_id="message-1",
-        start_ns=10 * SECOND_NS,
-    )
-    consumers = [
-        span(
-            domain_id="destination",
-            name="receive",
-            span_index=index,
-            message_id="message-1",
-            start_ns=10 * SECOND_NS + index * 10_000,
-        )
-        for index in (2, 3)
-    ]
-
     observation = evaluate_channel_delivery(
         channel_contract(minimum_source_messages=2),
-        {"source": [producer], "destination": consumers},
+        duplicated_delivery_spans(),
     )
 
     assert observation.status == "failed"
