@@ -78,14 +78,14 @@ this package alone does not qualify a target.
 
 ## Install
 
-Install the attested `v0.12.0` release with its exact contracts baseline:
+Install the attested `v0.12.1` release with its exact contracts baseline:
 
 ```bash
 CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.11.0/robotics_runtime_contracts-0.11.0-py3-none-any.whl
-HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.12.0/robotics_acceptance_harness-0.12.0-py3-none-any.whl
+HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.12.1/robotics_acceptance_harness-0.12.1-py3-none-any.whl
 uv tool install \
   --with "${CONTRACTS}#sha256=71e156210b0f16571b9f734926b84f0516100e30bea46369ae798371990bb5b9" \
-  "${HARNESS}#sha256=e2229e134a6a3ca1bccf5d216369c51f56db7dd0a68dc8e24ff11f138669a255"
+  "${HARNESS}#sha256=461956d42c94f42ca894c38b36785282e5af8a495863db39c8f465c84d330f84"
 ```
 
 Release provenance verification is described in
