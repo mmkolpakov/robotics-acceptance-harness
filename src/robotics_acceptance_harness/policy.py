@@ -98,6 +98,7 @@ def evaluate_data_plane_policy(
         require_window_coverage(
             message_age_coverage,
             metric_name="robotics.message.age",
+            temporality=message_age_points[0].temporality,
             window_start_ns=window_start_ns,
             window_end_ns=window_end_ns,
         )
@@ -144,6 +145,8 @@ def evaluate_data_plane_policy(
             window_start_ns=window_start_ns,
             window_end_ns=window_end_ns,
         )
+        if not (received.temporality == lost.temporality == sequence_errors.temporality):
+            raise MetricAggregationError("message counters use different aggregation temporalities")
         if not (received.coverage == lost.coverage == sequence_errors.coverage):
             raise MetricAggregationError(
                 "message counters do not cover the same collection intervals"
@@ -151,6 +154,7 @@ def evaluate_data_plane_policy(
         require_window_coverage(
             received.coverage,
             metric_name="message counters",
+            temporality=received.temporality,
             window_start_ns=window_start_ns,
             window_end_ns=window_end_ns,
         )

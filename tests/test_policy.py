@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+
+import pytest
 
 from robotics_acceptance_harness.evidence import load_evidence_index
 from robotics_acceptance_harness.metrics import (
+    AssertionEvaluation,
     HistogramSample,
+    MetricPoint,
     MetricSample,
     MetricTemporality,
 )
@@ -62,6 +67,26 @@ def data_plane_policy(
         "data_sharing": False,
         "private_ipc": True,
     }
+
+
+def data_plane_results(
+    samples: Sequence[MetricPoint],
+    *,
+    policy: Mapping[str, object] | None = None,
+    runtime: Mapping[str, object] | None = None,
+    start_ns: int = 0,
+    end_ns: int = 1,
+) -> tuple[AssertionEvaluation, ...]:
+    selected_policy = policy if policy is not None else data_plane_policy()
+    selected_runtime = runtime if runtime is not None else {"data_plane": dict(selected_policy)}
+    return evaluate_data_plane_policy(
+        selected_policy,
+        selected_runtime,
+        samples,
+        domain_id="camera",
+        window_start_ns=start_ns,
+        window_end_ns=end_ns,
+    )
 
 
 def counter(
@@ -155,13 +180,11 @@ def test_data_plane_policy_checks_static_transport_and_attributed_metrics() -> N
         counter("robotics.message.sequence_error", 0, 2),
     ]
 
-    evaluations = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    evaluations = data_plane_results(
         samples,
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=2,
+        policy=policy,
+        runtime=runtime,
+        end_ns=2,
     )
 
     static = next(item for item in evaluations if item.assertion_id == "data-plane-private-ipc")
@@ -175,24 +198,23 @@ def test_data_plane_policy_checks_static_transport_and_attributed_metrics() -> N
 
 def test_data_plane_loss_is_derived_from_delta_counters() -> None:
     policy = data_plane_policy(max_loss_ratio=0.1)
-    runtime = {"data_plane": dict(policy)}
+    midpoint_ns = 5_000_000_000
+    resumed_ns = midpoint_ns + 349_000_000
     samples = [
-        message_age(5, 2),
-        counter("robotics.message.received", 40, 1),
-        counter("robotics.message.received", 50, 2, start_time_ns=1),
-        counter("robotics.message.lost", 4, 1),
-        counter("robotics.message.lost", 6, 2, start_time_ns=1),
-        counter("robotics.message.sequence_error", 0, 1),
-        counter("robotics.message.sequence_error", 0, 2, start_time_ns=1),
+        message_age(5, midpoint_ns),
+        message_age(5, 10_000_000_000, start_time_ns=resumed_ns),
+        counter("robotics.message.received", 40, midpoint_ns),
+        counter("robotics.message.received", 50, 10_000_000_000, start_time_ns=resumed_ns),
+        counter("robotics.message.lost", 4, midpoint_ns),
+        counter("robotics.message.lost", 6, 10_000_000_000, start_time_ns=resumed_ns),
+        counter("robotics.message.sequence_error", 0, midpoint_ns),
+        counter("robotics.message.sequence_error", 0, 10_000_000_000, start_time_ns=resumed_ns),
     ]
 
-    evaluations = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    evaluations = data_plane_results(
         samples,
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=2,
+        policy=policy,
+        end_ns=10_000_000_000,
     )
 
     loss = next(item for item in evaluations if item.assertion_id == "data-plane-loss-ratio")
@@ -200,30 +222,24 @@ def test_data_plane_loss_is_derived_from_delta_counters() -> None:
     assert loss.observed_value == 0.1
 
 
-def test_data_plane_rejects_overlapping_or_misaligned_counter_intervals() -> None:
+def test_data_plane_rejects_invalid_counter_intervals_or_temporalities() -> None:
     policy = data_plane_policy(max_loss_ratio=0.1)
-    runtime = {"data_plane": dict(policy)}
     common = [
         message_age(5, 2),
         counter("robotics.message.lost", 1, 2, start_time_ns=0),
         counter("robotics.message.sequence_error", 0, 1, start_time_ns=0),
         counter("robotics.message.sequence_error", 0, 2, start_time_ns=1),
     ]
-    overlapping = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    overlapping = data_plane_results(
         [
             *common,
             counter("robotics.message.received", 50, 1, start_time_ns=0),
             counter("robotics.message.received", 50, 2, start_time_ns=0),
         ],
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=2,
+        policy=policy,
+        end_ns=2,
     )
-    misaligned = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    misaligned = data_plane_results(
         [
             message_age(5, 2),
             counter("robotics.message.received", 50, 1, start_time_ns=0),
@@ -232,9 +248,18 @@ def test_data_plane_rejects_overlapping_or_misaligned_counter_intervals() -> Non
             counter("robotics.message.sequence_error", 0, 1, start_time_ns=0),
             counter("robotics.message.sequence_error", 0, 2, start_time_ns=1),
         ],
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=2,
+        policy=policy,
+        end_ns=2,
+    )
+    mixed_temporality = data_plane_results(
+        [
+            message_age(5, 2),
+            counter("robotics.message.received", 50, 2),
+            counter("robotics.message.lost", 0, 2, temporality="cumulative"),
+            counter("robotics.message.sequence_error", 0, 2, temporality="cumulative"),
+        ],
+        policy=policy,
+        end_ns=2,
     )
 
     overlap_loss = next(
@@ -243,15 +268,18 @@ def test_data_plane_rejects_overlapping_or_misaligned_counter_intervals() -> Non
     misaligned_loss = next(
         item for item in misaligned if item.assertion_id == "data-plane-loss-ratio"
     )
+    mixed_loss = next(
+        item for item in mixed_temporality if item.assertion_id == "data-plane-loss-ratio"
+    )
     assert overlap_loss.status == "error"
     assert "overlapping delta intervals" in overlap_loss.message
     assert misaligned_loss.status == "error"
     assert "same collection intervals" in misaligned_loss.message
+    assert mixed_loss.status == "error"
+    assert "different aggregation temporalities" in mixed_loss.message
 
 
 def test_data_plane_rejects_a_short_sample_inside_a_long_measurement_window() -> None:
-    policy = data_plane_policy()
-    runtime = {"data_plane": dict(policy)}
     start_ns = 20_000_000_000
     end_ns = 21_000_000_000
     samples = [
@@ -276,13 +304,9 @@ def test_data_plane_rejects_a_short_sample_inside_a_long_measurement_window() ->
         ),
     ]
 
-    evaluations = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    evaluations = data_plane_results(
         samples,
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=60_000_000_000,
+        end_ns=60_000_000_000,
     )
 
     dynamic = [
@@ -299,7 +323,6 @@ def test_data_plane_rejects_a_short_sample_inside_a_long_measurement_window() ->
 
 def test_data_plane_loss_uses_cumulative_counter_baselines() -> None:
     policy = data_plane_policy(max_loss_ratio=0.1)
-    runtime = {"data_plane": dict(policy)}
     samples = [
         message_age(5, 3, start_time_ns=2),
         counter(
@@ -346,13 +369,11 @@ def test_data_plane_loss_uses_cumulative_counter_baselines() -> None:
         ),
     ]
 
-    evaluations = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    evaluations = data_plane_results(
         samples,
-        domain_id="camera",
-        window_start_ns=2,
-        window_end_ns=3,
+        policy=policy,
+        start_ns=2,
+        end_ns=3,
     )
 
     loss = next(item for item in evaluations if item.assertion_id == "data-plane-loss-ratio")
@@ -360,9 +381,14 @@ def test_data_plane_loss_uses_cumulative_counter_baselines() -> None:
     assert loss.observed_value == 0.1
 
 
-def test_data_plane_cumulative_counters_survive_process_reset() -> None:
+@pytest.mark.parametrize(
+    ("reset_start_ns", "expected_status"),
+    [(2, "passed"), (3, "error")],
+)
+def test_data_plane_cumulative_counters_require_continuity_across_reset(
+    reset_start_ns: int, expected_status: str
+) -> None:
     policy = data_plane_policy(max_loss_ratio=0.1)
-    runtime = {"data_plane": dict(policy)}
     samples = [
         message_age(5, 5),
         counter(
@@ -377,7 +403,7 @@ def test_data_plane_cumulative_counters_survive_process_reset() -> None:
             90,
             5,
             temporality="cumulative",
-            start_time_ns=2,
+            start_time_ns=reset_start_ns,
         ),
         counter(
             "robotics.message.lost",
@@ -391,7 +417,7 @@ def test_data_plane_cumulative_counters_survive_process_reset() -> None:
             10,
             5,
             temporality="cumulative",
-            start_time_ns=2,
+            start_time_ns=reset_start_ns,
         ),
         counter(
             "robotics.message.sequence_error",
@@ -405,27 +431,23 @@ def test_data_plane_cumulative_counters_survive_process_reset() -> None:
             0,
             5,
             temporality="cumulative",
-            start_time_ns=2,
+            start_time_ns=reset_start_ns,
         ),
     ]
 
-    evaluations = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    evaluations = data_plane_results(
         samples,
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=5,
+        policy=policy,
+        end_ns=5,
     )
 
     loss = next(item for item in evaluations if item.assertion_id == "data-plane-loss-ratio")
-    assert loss.status == "passed"
-    assert loss.observed_value == 20 / 210
+    assert loss.status == expected_status
+    if expected_status == "passed":
+        assert loss.observed_value == 20 / 210
 
 
 def test_data_plane_rejects_last_value_ratio_and_empty_counters() -> None:
-    policy = data_plane_policy()
-    runtime = {"data_plane": dict(policy)}
     common = [
         message_age(5, 1),
         MetricSample(
@@ -437,26 +459,14 @@ def test_data_plane_rejects_last_value_ratio_and_empty_counters() -> None:
         ),
     ]
 
-    last_value = evaluate_data_plane_policy(
-        policy,
-        runtime,
-        common,
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=1,
-    )
-    empty = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    last_value = data_plane_results(common)
+    empty = data_plane_results(
         [
             *common,
             counter("robotics.message.received", 0, 1),
             counter("robotics.message.lost", 0, 1),
             counter("robotics.message.sequence_error", 0, 1),
         ],
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=1,
     )
 
     last_value_loss = next(
@@ -470,37 +480,25 @@ def test_data_plane_rejects_last_value_ratio_and_empty_counters() -> None:
 
 
 def test_data_plane_rejects_ambiguous_channels_and_wrong_counter_units() -> None:
-    policy = data_plane_policy()
-    runtime = {"data_plane": dict(policy)}
     base = [
         message_age(5, 1),
         counter("robotics.message.received", 10, 1),
         counter("robotics.message.lost", 0, 1),
         counter("robotics.message.sequence_error", 0, 1),
     ]
-    ambiguous = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    ambiguous = data_plane_results(
         [
             *base,
             message_age(6, 1, channel="/camera/image"),
         ],
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=1,
     )
-    wrong_unit = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    wrong_unit = data_plane_results(
         [
             base[0],
             counter("robotics.message.received", 10, 1, unit="1"),
             counter("robotics.message.lost", 0, 1, unit="1"),
             counter("robotics.message.sequence_error", 0, 1),
         ],
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=1,
     )
 
     assert {
@@ -514,11 +512,7 @@ def test_data_plane_rejects_ambiguous_channels_and_wrong_counter_units() -> None
 
 
 def test_data_plane_rejects_message_age_gauge() -> None:
-    policy = data_plane_policy()
-    runtime = {"data_plane": dict(policy)}
-    evaluations = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    evaluations = data_plane_results(
         [
             MetricSample(
                 "robotics.message.age",
@@ -534,9 +528,6 @@ def test_data_plane_rejects_message_age_gauge() -> None:
             counter("robotics.message.lost", 0, 1),
             counter("robotics.message.sequence_error", 0, 1),
         ],
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=1,
     )
 
     age = next(item for item in evaluations if item.assertion_id == "data-plane-message-age")
@@ -547,21 +538,13 @@ def test_data_plane_rejects_message_age_gauge() -> None:
 
 
 def test_data_plane_sequence_integrity_fails_on_invalid_metadata() -> None:
-    policy = data_plane_policy()
-    runtime = {"data_plane": dict(policy)}
-
-    evaluations = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    evaluations = data_plane_results(
         [
             message_age(5, 1),
             counter("robotics.message.received", 9, 1),
             counter("robotics.message.lost", 0, 1),
             counter("robotics.message.sequence_error", 1, 1),
         ],
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=1,
     )
 
     integrity = next(
@@ -572,12 +555,7 @@ def test_data_plane_sequence_integrity_fails_on_invalid_metadata() -> None:
 
 
 def test_data_plane_rejects_an_unqualified_sequence_measurement_method() -> None:
-    policy = data_plane_policy()
-    runtime = {"data_plane": dict(policy)}
-
-    evaluations = evaluate_data_plane_policy(
-        policy,
-        runtime,
+    evaluations = data_plane_results(
         [
             message_age(5, 1),
             counter("robotics.message.received", 9, 1, sequence_method="payload_counter"),
@@ -589,9 +567,6 @@ def test_data_plane_rejects_an_unqualified_sequence_measurement_method() -> None
                 sequence_method="payload_counter",
             ),
         ],
-        domain_id="camera",
-        window_start_ns=0,
-        window_end_ns=1,
     )
 
     loss = next(item for item in evaluations if item.assertion_id == "data-plane-loss-ratio")
