@@ -232,7 +232,13 @@ def test_cumulative_histogram_uses_window_baseline() -> None:
     assert result.observed_value == 3
 
 
-def test_cumulative_histogram_preserves_series_across_reset() -> None:
+@pytest.mark.parametrize(
+    ("reset_start_ns", "expected_status"),
+    [(2, "passed"), (3, "error")],
+)
+def test_cumulative_histogram_requires_continuity_across_reset(
+    reset_start_ns: int, expected_status: str
+) -> None:
     points = [
         histogram(
             observed_at_ns=2,
@@ -248,7 +254,7 @@ def test_cumulative_histogram_preserves_series_across_reset() -> None:
             bucket_counts=(0, 1, 2, 0),
             sum_value=80,
             temporality="cumulative",
-            start_time_ns=2,
+            start_time_ns=reset_start_ns,
         ),
     ]
 
@@ -259,8 +265,9 @@ def test_cumulative_histogram_preserves_series_across_reset() -> None:
         window_end_ns=5,
     )[0]
 
-    assert result.status == "passed"
-    assert result.observed_value == 5
+    assert result.status == expected_status
+    if expected_status == "passed":
+        assert result.observed_value == 5
 
 
 def test_rejects_mixed_points_and_incompatible_histogram_buckets() -> None:
@@ -506,31 +513,30 @@ def test_histogram_window_limits_total_uncovered_edges() -> None:
     assert "does not cover enough" in result.message
 
 
-def test_delta_histogram_rejects_gapped_intervals() -> None:
+def test_delta_histogram_accepts_gaps_between_recorded_intervals() -> None:
     result = evaluate_metric_assertions(
         [assertion(aggregation="count", operator="eq", threshold=2)],
         [
             histogram(
-                observed_at_ns=1,
-                start_time_ns=0,
+                observed_at_ns=5_000_000_000,
+                start_time_ns=176_000_000,
                 count=1,
                 bucket_counts=(1, 0, 0, 0),
                 sum_value=5,
             ),
             histogram(
-                observed_at_ns=3,
-                start_time_ns=2,
+                observed_at_ns=9_856_000_000,
+                start_time_ns=5_349_000_000,
                 count=1,
                 bucket_counts=(1, 0, 0, 0),
                 sum_value=5,
             ),
         ],
         window_start_ns=0,
-        window_end_ns=3,
+        window_end_ns=10_000_000_000,
     )[0]
 
-    assert result.status == "error"
-    assert "gapped delta intervals" in result.message
+    assert result.status == "passed"
 
 
 def test_generic_metric_assertion_rejects_otlp_sum() -> None:

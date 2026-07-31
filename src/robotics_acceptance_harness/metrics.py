@@ -106,6 +106,7 @@ class MetricAggregationError(ValueError):
 class CounterWindowAggregate:
     total: float
     coverage: MetricIntervalCoverage
+    temporality: MetricTemporality
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,13 +182,10 @@ def _validated_delta_points(
             series,
             key=lambda point: (point.start_time_ns, point.observed_at_ns),
         ):
-            if previous_end_ns is not None and sample.start_time_ns != previous_end_ns:
-                relation = (
-                    "duplicate or overlapping"
-                    if sample.start_time_ns < previous_end_ns
-                    else "gapped"
+            if previous_end_ns is not None and sample.start_time_ns < previous_end_ns:
+                raise MetricAggregationError(
+                    f"{metric_name} contains duplicate or overlapping delta intervals"
                 )
-                raise MetricAggregationError(f"{metric_name} contains {relation} delta intervals")
             previous_end_ns = sample.observed_at_ns
     return selected
 
@@ -209,11 +207,12 @@ def require_window_coverage(
     coverage: MetricIntervalCoverage,
     *,
     metric_name: str,
+    temporality: MetricTemporality | None,
     window_start_ns: int,
     window_end_ns: int,
     tolerance_ns: int = METRIC_WINDOW_COVERAGE_TOLERANCE_NS,
 ) -> None:
-    """Require every metric series to cover nearly all of the declared window."""
+    """Require valid intervals that reach both boundaries of the declared window."""
 
     if tolerance_ns < 0:
         raise ValueError("metric coverage tolerance cannot be negative")
@@ -236,10 +235,12 @@ def require_window_coverage(
             ordered[1:],
             strict=False,
         ):
-            if start_ns != previous_end_ns:
+            if start_ns < previous_end_ns:
                 raise MetricAggregationError(
-                    f"{metric_name} does not continuously cover the evaluation window"
+                    f"{metric_name} contains overlapping coverage intervals"
                 )
+            if start_ns > previous_end_ns and temporality != "delta":
+                raise MetricAggregationError(f"{metric_name} contains gapped coverage intervals")
         first_start_ns = ordered[0][0]
         last_end_ns = ordered[-1][1]
         if abs(first_start_ns - window_start_ns) > effective_tolerance_ns:
@@ -591,7 +592,7 @@ def counter_window_aggregate(
     if len(temporalities) != 1:
         raise MetricAggregationError(f"{metric_name} mixes aggregation temporalities")
     temporality = next(iter(temporalities))
-    if temporality == "unspecified":
+    if temporality in {None, "unspecified"}:
         raise MetricAggregationError(f"{metric_name} has unspecified aggregation temporality")
     if temporality == "delta":
         points = [
@@ -614,6 +615,7 @@ def counter_window_aggregate(
         return CounterWindowAggregate(
             total=sum(sample.value for sample in points),
             coverage=delta_coverage,
+            temporality=temporality,
         )
 
     grouped: dict[
@@ -681,7 +683,7 @@ def counter_window_aggregate(
                     f"{metric_name} contains overlapping cumulative intervals"
                 )
             previous_end_ns = end_ns
-    return CounterWindowAggregate(total=total, coverage=ordered_coverage)
+    return CounterWindowAggregate(total=total, coverage=ordered_coverage, temporality=temporality)
 
 
 def _compare(operator: str, observed: float | int, threshold: float) -> bool:
@@ -846,6 +848,7 @@ def evaluate_metric_assertions(
                         window_end_ns=end_ns,
                     ),
                     metric_name=metric_name,
+                    temporality=histogram_samples[0].temporality,
                     window_start_ns=start_ns,
                     window_end_ns=end_ns,
                 )

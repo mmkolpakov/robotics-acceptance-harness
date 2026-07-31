@@ -86,6 +86,7 @@ def _delivery_latency_observation(
                 window_end_ns=window_end_ns,
             ),
             metric_name=DELIVERY_LATENCY_METRIC,
+            temporality=selected[0].temporality if selected else "unspecified",
             window_start_ns=window_start_ns,
             window_end_ns=window_end_ns,
         )
