@@ -21,7 +21,7 @@ from robotics_acceptance_harness.time_authority import TimeAuthorityObservation
 from robotics_acceptance_harness.timing import TimingObservation
 
 
-def _iso8601(value: datetime) -> str:
+def format_utc_datetime(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
@@ -120,7 +120,7 @@ def _hardware_clock_result(
     return {
         "sync_protocol": observation.sync_protocol,
         "source": observation.source,
-        "measured_at": _iso8601(observation.measured_at),
+        "measured_at": format_utc_datetime(observation.measured_at),
         "sample_count": observation.sample_count,
         "offset_ms": observation.offset_ms,
         "jitter_ms": observation.jitter_ms,
@@ -189,8 +189,8 @@ def build_acceptance_result(
         "unevaluated": sorted(set(unevaluated)),
         "scenario_sha256": bundle.scenario.sha256,
         "runtime_manifest_sha256": bundle.runtime.sha256,
-        "started_at": _iso8601(started_at),
-        "finished_at": _iso8601(finished_at),
+        "started_at": format_utc_datetime(started_at),
+        "finished_at": format_utc_datetime(finished_at),
         "monotonic_duration_sec": monotonic_duration_sec,
         "status": result_status,
         "assertion_results": [
@@ -205,16 +205,7 @@ def build_acceptance_result(
         ],
         "observed_ros_graph": _observed_graph(readiness),
         "forbidden_graph_observation": _forbidden_graph_result(forbidden_graph),
-        "execution": {
-            field: bundle.scenario.data["execution"][field]
-            for field in (
-                "target_environment",
-                "data_source",
-                "plant_backend",
-                "time_mode",
-                "data_plane_profile",
-            )
-        },
+        "execution": dict(bundle.runtime.data["execution"]),
         "workload": _workload_result(bundle.runtime.data),
         "authorization": _authorization_result(bundle),
         "lifecycle_states": _lifecycle_states(readiness.snapshot),

@@ -144,22 +144,6 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _extension_schemas(values: Sequence[str]) -> Mapping[str, bytes]:
-    schemas: dict[str, bytes] = {}
-    for value in values:
-        namespace, separator, path_value = value.partition("=")
-        if not separator or not namespace or not path_value:
-            raise ValueError(f"invalid --extension-schema value: {value!r}")
-        if namespace in schemas:
-            raise ValueError(f"duplicate extension schema namespace: {namespace}")
-        path = Path(path_value).expanduser().resolve()
-        try:
-            schemas[namespace] = path.read_bytes()
-        except OSError as error:
-            raise ValueError(f"cannot read extension schema {path}: {error}") from error
-    return schemas
-
-
 def _keyed_values(values: Sequence[str], option: str) -> Mapping[str, str]:
     parsed: dict[str, str] = {}
     for value in values:
@@ -170,6 +154,17 @@ def _keyed_values(values: Sequence[str], option: str) -> Mapping[str, str]:
             raise ValueError(f"duplicate {option} key: {key}")
         parsed[key] = item
     return parsed
+
+
+def _extension_schemas(values: Sequence[str]) -> Mapping[str, bytes]:
+    schemas: dict[str, bytes] = {}
+    for namespace, path_value in _keyed_values(values, "--extension-schema").items():
+        path = Path(path_value).expanduser().resolve()
+        try:
+            schemas[namespace] = path.read_bytes()
+        except OSError as error:
+            raise ValueError(f"cannot read extension schema {path}: {error}") from error
+    return schemas
 
 
 def _bundle(arguments: argparse.Namespace) -> DocumentBundle:
