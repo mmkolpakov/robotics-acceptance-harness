@@ -871,23 +871,3 @@ def evaluate_metric_assertions(
             )
         )
     return tuple(evaluations)
-
-
-__all__ = [
-    "AssertionEvaluation",
-    "CounterWindowAggregate",
-    "HistogramSample",
-    "MetricAggregationError",
-    "MetricAttribute",
-    "MetricPoint",
-    "MetricSample",
-    "MetricTemporality",
-    "METRIC_WINDOW_COVERAGE_TOLERANCE_NS",
-    "METRIC_WINDOW_MAX_UNCOVERED_FRACTION",
-    "aggregate_metric_points",
-    "counter_window_aggregate",
-    "evaluate_metric_assertions",
-    "histogram_window_coverage",
-    "percentile",
-    "require_window_coverage",
-]

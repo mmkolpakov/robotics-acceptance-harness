@@ -142,15 +142,3 @@ def evaluate_time_authority(
         max_ms=maximum,
         within_policy=within_policy,
     )
-
-
-__all__ = [
-    "DOMAIN_ATTRIBUTE",
-    "DELIVERY_LATENCY_METRIC",
-    "METHOD_ATTRIBUTE",
-    "RMW_LATENCY_METHOD",
-    "RUN_ATTRIBUTE",
-    "SOURCE_ATTRIBUTE",
-    "TimeAuthorityObservation",
-    "evaluate_time_authority",
-]

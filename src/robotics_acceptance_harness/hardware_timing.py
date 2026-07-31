@@ -146,16 +146,3 @@ def evaluate_hardware_timing(
         monotonic=monotonic,
         within_policy=within_policy,
     )
-
-
-__all__ = [
-    "AGE_METRIC",
-    "DRIFT_METRIC",
-    "HardwareTimingInputError",
-    "HardwareTimingObservation",
-    "MONOTONIC_METRIC",
-    "OFFSET_METRIC",
-    "PROTOCOL_ATTRIBUTE",
-    "SOURCE_ATTRIBUTE",
-    "evaluate_hardware_timing",
-]
