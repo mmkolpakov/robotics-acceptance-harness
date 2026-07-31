@@ -23,6 +23,29 @@ class MetricInputError(ValueError):
     """Raised when an OTLP JSON file cannot be interpreted as metric samples."""
 
 
+def read_otlp_json_lines(
+    path: str | Path,
+    expected_sha256: str | None,
+    error_type: type[ValueError],
+) -> tuple[Path, list[str]]:
+    """Read and integrity-check newline-delimited OTLP JSON."""
+
+    source = Path(path).expanduser().resolve()
+    try:
+        payload_bytes = source.read_bytes()
+    except OSError as error:
+        raise error_type(f"cannot read {source}: {error}") from error
+    observed_sha256 = sha256(payload_bytes).hexdigest()
+    if expected_sha256 is not None and observed_sha256 != expected_sha256:
+        raise error_type(
+            f"{source} digest differs: expected {expected_sha256}; observed {observed_sha256}"
+        )
+    try:
+        return source, payload_bytes.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise error_type(f"cannot decode {source} as UTF-8: {error}") from error
+
+
 def _number_value(point: Any) -> float | None:
     value_kind = point.WhichOneof("value")
     if value_kind == "as_double":
@@ -81,21 +104,8 @@ def load_otlp_json_metrics(
 ) -> tuple[MetricPoint, ...]:
     """Read newline-delimited OTLP JSON emitted by the Collector file exporter."""
 
-    source = Path(path).expanduser().resolve()
+    source, lines = read_otlp_json_lines(path, expected_sha256, MetricInputError)
     samples: list[MetricPoint] = []
-    try:
-        payload_bytes = source.read_bytes()
-    except OSError as error:
-        raise MetricInputError(f"cannot read {source}: {error}") from error
-    observed_sha256 = sha256(payload_bytes).hexdigest()
-    if expected_sha256 is not None and observed_sha256 != expected_sha256:
-        raise MetricInputError(
-            f"{source} digest differs: expected {expected_sha256}; observed {observed_sha256}"
-        )
-    try:
-        lines = payload_bytes.decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise MetricInputError(f"cannot decode {source} as UTF-8: {error}") from error
 
     for line_number, line in enumerate(lines, start=1):
         if not line.strip():

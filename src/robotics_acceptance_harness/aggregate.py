@@ -11,6 +11,7 @@ from robotics_acceptance_harness import __version__
 from robotics_acceptance_harness.documents import BundleValidationError, load_document
 from robotics_acceptance_harness.evidence import load_evidence_index
 from robotics_acceptance_harness.result import format_utc_datetime, write_contract_json
+from robotics_acceptance_harness.status import worst_status
 from robotics_acceptance_harness.traces import (
     CausalHop,
     ChainViolation,
@@ -19,20 +20,6 @@ from robotics_acceptance_harness.traces import (
     load_otlp_json_traces,
     validate_trace_set,
 )
-
-
-def _domain_aggregate(statuses: set[str]) -> str:
-    return (
-        "error"
-        if "error" in statuses
-        else "failed"
-        if "failed" in statuses
-        else "incomplete"
-        if "incomplete" in statuses
-        else "cancelled"
-        if "cancelled" in statuses
-        else "passed"
-    )
 
 
 def aggregate_results(
@@ -90,7 +77,7 @@ def aggregate_results(
                 "result uses another time authority",
             )
 
-    aggregate_status = _domain_aggregate({str(item.data["status"]) for item in results})
+    aggregate_status = worst_status({str(item.data["status"]) for item in results})
     aggregate: dict[str, Any] = {
         "schema_version": "acceptance-aggregate.v3",
         "aggregate_id": aggregate_id or f"aggregate-{uuid4()}",
@@ -184,21 +171,6 @@ def _hop_document(hop: CausalHop) -> dict[str, Any]:
         "status": "passed",
         "violations": [],
     }
-
-
-def _cross_domain_status(
-    per_domain_status: str,
-    channel_statuses: set[str],
-    chain_statuses: set[str],
-) -> str:
-    statuses = {per_domain_status, *chain_statuses, *channel_statuses}
-    if "error" in statuses:
-        return "error"
-    if "failed" in statuses:
-        return "failed"
-    if statuses & {"incomplete", "cancelled"}:
-        return "incomplete"
-    return "passed"
 
 
 def _evaluate_trace(
@@ -487,10 +459,9 @@ def _evaluate_trace(
         "causal_chains": chain_documents,
     }
     domain_status = str(base.data["per_domain_aggregate"]) if base is not None else "passed"
-    transport_status = _cross_domain_status(
-        domain_status,
-        observation_statuses,
-        chain_statuses,
+    transport_status = worst_status(
+        {domain_status, *observation_statuses, *chain_statuses},
+        collapse_cancelled=True,
     )
     verdict = {
         "status": transport_status,

@@ -33,14 +33,15 @@ class VerifiedEvidence:
     mcap_summaries: tuple[LoadedDocument, ...] = ()
 
 
-def _platform_path(value: str) -> Path:
-    if os_name == "nt" and len(value) > 3 and value[0] == "/" and value[2] == ":":
-        value = value[1:]
-    return Path(value)
+def _local_path(value: str) -> Path:
+    decoded = unquote(value)
+    if os_name == "nt" and decoded.startswith("/") and decoded[2:3] == ":":
+        decoded = decoded[1:]
+    return Path(decoded)
 
 
 def _local_link(segment: Mapping[str, Any], index: int) -> tuple[Path, Mapping[str, Any]]:
-    path = _platform_path(str(segment["local_path"]))
+    path = _local_path(str(segment["local_path"]))
     json_path = f"$.segments[{index}]"
     uri = urlsplit(str(segment["uri"]))
     if uri.scheme != "file" or uri.netloc not in {"", "localhost"}:
@@ -48,7 +49,7 @@ def _local_link(segment: Mapping[str, Any], index: int) -> tuple[Path, Mapping[s
             f"{json_path}.uri",
             "local evidence requires a local file URI",
         )
-    uri_path = _platform_path(unquote(uri.path))
+    uri_path = _local_path(uri.path)
     if uri_path.resolve() != path.resolve():
         raise EvidenceValidationError(
             f"{json_path}.local_path",
@@ -106,7 +107,7 @@ def _local_summary(
             f"{json_path}.uri",
             "acceptance verification requires a local MCAP summary",
         )
-    path = _platform_path(unquote(uri.path)).resolve()
+    path = _local_path(uri.path).resolve()
     if not path.is_file():
         raise EvidenceValidationError(f"{json_path}.uri", f"file does not exist: {path}")
     if path.stat().st_size != reference["size_bytes"]:

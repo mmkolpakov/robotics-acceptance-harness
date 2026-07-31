@@ -179,6 +179,11 @@ def _bundle(arguments: argparse.Namespace) -> DocumentBundle:
     )
 
 
+def _report_status(output: Path, status: str, key: str) -> int:
+    print(json.dumps({key: str(output), "status": status}, sort_keys=True))
+    return 0 if status == "passed" else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
@@ -202,9 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_path=arguments.output,
             )
             aggregate = json.loads(output.read_text(encoding="utf-8"))
-            status = aggregate["per_domain_aggregate"]
-            print(json.dumps({"aggregate": str(output), "status": status}, sort_keys=True))
-            return 0 if status == "passed" else 1
+            return _report_status(output, aggregate["per_domain_aggregate"], "aggregate")
 
         if arguments.command == "trace-evaluate":
             output = evaluate_trace_aggregate(
@@ -221,9 +224,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_path=arguments.output,
             )
             aggregate = json.loads(output.read_text(encoding="utf-8"))
-            status = aggregate["cross_domain_e2e"]["status"]
-            print(json.dumps({"aggregate": str(output), "status": status}, sort_keys=True))
-            return 0 if status == "passed" else 1
+            return _report_status(
+                output,
+                aggregate["cross_domain_e2e"]["status"],
+                "aggregate",
+            )
 
         if arguments.command == "transport-evaluate":
             output = evaluate_transport_qualification(
@@ -239,14 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_path=arguments.output,
             )
             result = json.loads(output.read_text(encoding="utf-8"))
-            status = result["verdict"]["status"]
-            print(
-                json.dumps(
-                    {"qualification": str(output), "status": status},
-                    sort_keys=True,
-                )
-            )
-            return 0 if status == "passed" else 1
+            return _report_status(output, result["verdict"]["status"], "qualification")
 
         bundle = _bundle(arguments)
         if arguments.command == "explain":
