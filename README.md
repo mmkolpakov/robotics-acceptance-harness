@@ -54,7 +54,6 @@ published by
 | Validate and explain an execution bundle | `robotics-acceptance explain` | No |
 | Observe a running execution and decide a verdict | `robotics-acceptance verify` | No |
 | Aggregate the complete set of domain results | `robotics-acceptance aggregate` | No |
-| Evaluate cross-domain causal chains | `robotics-acceptance trace-evaluate` | No |
 | Qualify transport without a domain execution | `robotics-acceptance transport-evaluate` | No |
 | Reuse a validated simulation bundle in project tests | `robotics_bundle` pytest fixture | No |
 
@@ -63,10 +62,10 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts>=0.11.0,<0.12` |
+| Contracts | `robotics-runtime-contracts>=0.12.0,<0.13` |
 | Scenarios | `acceptance-scenario.v4` |
 | Results | `acceptance-result.v4` |
-| Aggregates | `acceptance-aggregate.v3` |
+| Aggregates | `acceptance-aggregate.v4` |
 | Transport qualification | `transport-qualification-result.v1` |
 | ROS observation | ROS 2 Jazzy with `rclpy` and declared message packages |
 | Metrics | Newline-delimited OTLP JSON from the Collector file exporter |
@@ -78,11 +77,11 @@ this package alone does not qualify a target.
 
 ## Install
 
-Install the attested `v0.12.2` release with its exact contracts baseline:
+Install the attested `v0.13.0` release with its exact contracts baseline:
 
 ```bash
-CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.11.0/robotics_runtime_contracts-0.11.0-py3-none-any.whl
-HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.12.2/robotics_acceptance_harness-0.12.2-py3-none-any.whl
+CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.12.0/robotics_runtime_contracts-0.12.0-py3-none-any.whl
+HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.13.0/robotics_acceptance_harness-0.13.0-py3-none-any.whl
 uv tool install \
   --with "${CONTRACTS}#sha256=71e156210b0f16571b9f734926b84f0516100e30bea46369ae798371990bb5b9" \
   "${HARNESS}#sha256=e84ff38fab4ab1369a27bf804180dd0a1d01b57c7389db3ff5d670082388e9f1"
@@ -173,19 +172,17 @@ robotics-acceptance aggregate \
   --run-context /run/robotics/acceptance-run.json \
   --result /run/robotics/domain-a/acceptance-result.json \
   --result /run/robotics/domain-b/acceptance-result.json \
+  --transport-qualification /run/robotics/transport-qualification.json \
   --output /run/robotics/acceptance-aggregate.json
 ```
 
-`trace-evaluate` extends a valid domain aggregate with channel observations and
-verified per-domain OTLP trace evidence. Repeat `--causal-chain` for independent
-or branching flows, and run `robotics-acceptance trace-evaluate --help` for the
-repeatable `DOMAIN=PATH` arguments.
-
-`transport-evaluate` applies the same channel and causal-trace checks without a
+`transport-evaluate` checks channel delivery and causal traces without a
 scenario, runtime manifest, or per-domain result. It emits a
 `transport-qualification-result.v1` document and is the canonical interface for
-qualifying bridges and isolated ROS domain transport. These commands return `0`
-for `passed`, `1` for a completed non-passing verdict, and `2` for invalid input.
+qualifying bridges and isolated ROS domain transport. `aggregate` verifies and
+references that result by digest; omit `--transport-qualification` when
+cross-domain evidence was not evaluated. These commands return `0` for
+`passed`, `1` for a completed non-passing verdict, and `2` for invalid input.
 
 For each channel, the first producer span opens the declared observation
 window. Every counted producer and consumer span must fit completely inside
@@ -205,8 +202,8 @@ channel contract.
 | Verification record | HIL or real target | `execution-verification.v1` |
 | Evidence index | `verify` | `evidence-index.v2` |
 | Metrics | Metric assertions or physical observation | OTLP JSON |
-| Run context | `verify`, `aggregate`, `trace-evaluate` | `acceptance-run.v1` |
-| Channel and causal-chain contracts | `trace-evaluate`, `transport-evaluate` | `zenoh-channel.v1`, `causal-chain.v1` |
+| Run context | `verify`, `aggregate` | `acceptance-run.v1` |
+| Channel and causal-chain contracts | `transport-evaluate` | `zenoh-channel.v1`, `causal-chain.v1` |
 
 Local domain extensions remain explicit and digest-pinned:
 
@@ -300,7 +297,7 @@ Live ROS observation inherits standard ROS environment from the runtime:
 | `ROS_SECURITY_STRATEGY` | Use `Enforce` for a protected deployment |
 | `ROS_SECURITY_KEYSTORE` | Locate the externally provisioned SROS2 keystore |
 
-`explain`, `aggregate`, and `trace-evaluate` do not join a ROS graph. A
+`explain`, `aggregate`, and `transport-evaluate` do not join a ROS graph. A
 `run_id` uses the canonical lowercase `run-<uuid4>` form. For complete command
 syntax, use `robotics-acceptance COMMAND --help`.
 

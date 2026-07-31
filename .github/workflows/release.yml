@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           repository: mmkolpakov/robotics-runtime-contracts
-          ref: b9b2144abc3fed8e25bc1d312fb19bba20e3cbde
+          ref: a8a393e0eaacf1bd8c1b59e89c6f7a56699f331a
           persist-credentials: false
           path: robotics-runtime-contracts
       - name: Verify tag belongs to main

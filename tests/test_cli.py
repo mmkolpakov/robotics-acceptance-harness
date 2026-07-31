@@ -151,6 +151,46 @@ def test_verify_forwards_canonical_run_inputs(
     assert json.loads(capsys.readouterr().out)["status"] == "passed"
 
 
+def test_aggregate_forwards_transport_qualification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+    output = tmp_path / "acceptance-aggregate.json"
+
+    def fake_aggregate_results(**arguments: object) -> Path:
+        captured.update(arguments)
+        output.write_text(
+            json.dumps({"per_domain_aggregate": "passed"}),
+            encoding="utf-8",
+        )
+        return output
+
+    monkeypatch.setattr(
+        "robotics_acceptance_harness.cli.aggregate_results",
+        fake_aggregate_results,
+    )
+
+    exit_code = main(
+        [
+            "aggregate",
+            "--run-context",
+            "acceptance-run.json",
+            "--result",
+            "domain-result.json",
+            "--transport-qualification",
+            "transport-qualification.json",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["transport_qualification_path"] == "transport-qualification.json"
+    assert json.loads(capsys.readouterr().out)["status"] == "passed"
+
+
 def test_transport_evaluate_maps_domain_evidence_and_reports_verdict(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

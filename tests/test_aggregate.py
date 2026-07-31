@@ -10,7 +10,6 @@ import pytest
 
 from robotics_acceptance_harness.aggregate import (
     aggregate_results,
-    evaluate_trace_aggregate,
     evaluate_transport_qualification,
 )
 from robotics_acceptance_harness.documents import BundleValidationError, load_bundle, load_document
@@ -106,7 +105,10 @@ def result(
     return write_contract_json(document, tmp_path / f"result-{suffix}.json")
 
 
-def run_context(tmp_path: Path) -> Path:
+def run_context(
+    tmp_path: Path,
+    domains: list[dict[str, str]] | None = None,
+) -> Path:
     bundle = load_bundle(
         FIXTURES / "scenario.yaml",
         runtime_path=FIXTURES / "runtime.yaml",
@@ -119,7 +121,8 @@ def run_context(tmp_path: Path) -> Path:
             scenario_sha256=bundle.scenario.sha256,
             time_kind="sim_clock",
             source_id="simulation-clock",
-            domains=[
+            domains=domains
+            or [
                 {"domain_id": "camera-domain", "role": "sensor"},
                 {"domain_id": "control-domain", "role": "controller"},
             ],
@@ -313,7 +316,7 @@ def causal_chain(
     )
 
 
-def trace_aggregate(
+def transport_qualification(
     tmp_path: Path,
     *,
     relationship: str,
@@ -323,7 +326,6 @@ def trace_aggregate(
     consumer_message_id: str = "message-1",
     chain_count: int = 1,
 ) -> dict[str, object]:
-    context_path = run_context(tmp_path)
     producer = trace_file(
         tmp_path,
         "camera-domain",
@@ -350,52 +352,9 @@ def trace_aggregate(
                 filename="causal-chain-audit.json",
             )
         )
-    output = evaluate_trace_aggregate(
-        run_context_path=context_path,
-        base_aggregate_path=base_aggregate(tmp_path, context_path),
-        causal_chain_paths=chain_paths,
-        channel_contract_paths=[channel_path],
-        trace_paths={
-            "camera-domain": producer,
-            "control-domain": consumer,
-        },
-        evidence_index_paths={
-            "camera-domain": trace_evidence_index(tmp_path, "camera-domain", producer),
-            "control-domain": trace_evidence_index(tmp_path, "control-domain", consumer),
-        },
-        observation_output_dir=tmp_path / "observations",
-        output_path=tmp_path / "trace-aggregate.json",
-        aggregate_id="aggregate-01234567-89ab-4def-8123-456789abcdef",
-        generated_at=datetime(2026, 7, 26, 12, 3, tzinfo=UTC),
-    )
-    return json.loads(output.read_text(encoding="utf-8"))
-
-
-def transport_qualification(
-    tmp_path: Path,
-    *,
-    relationship: str,
-    consumer_link: int | None = None,
-    consumer_message_id: str = "message-1",
-) -> dict[str, object]:
-    producer = trace_file(
-        tmp_path,
-        "camera-domain",
-        "observation publish",
-        2,
-    )
-    consumer = trace_file(
-        tmp_path,
-        "control-domain",
-        "observation receive",
-        3,
-        message_id=consumer_message_id,
-        link_byte=consumer_link,
-    )
-    channel_path = channel_contract(tmp_path, relationship)
     output = evaluate_transport_qualification(
         run_id=RUN_ID,
-        causal_chain_paths=[causal_chain(tmp_path, channel_path)],
+        causal_chain_paths=chain_paths,
         channel_contract_paths=[channel_path],
         trace_paths={
             "camera-domain": producer,
@@ -424,6 +383,65 @@ def test_aggregate_requires_and_emits_every_registered_domain(tmp_path: Path) ->
         "control-domain",
     ]
     assert aggregate["cross_domain_e2e"]["status"] == "unevaluated"
+
+
+def test_aggregate_references_transport_qualification(tmp_path: Path) -> None:
+    context_path = run_context(tmp_path)
+    transport_qualification(tmp_path, relationship="link", consumer_link=2)
+    qualification_path = tmp_path / "transport-qualification.json"
+
+    output = aggregate_results(
+        run_context_path=context_path,
+        result_paths=[
+            result(tmp_path, "camera-domain", "0"),
+            result(tmp_path, "control-domain", "1"),
+        ],
+        transport_qualification_path=qualification_path,
+        output_path=tmp_path / "aggregate.json",
+    )
+
+    aggregate = json.loads(output.read_text(encoding="utf-8"))
+    reference = aggregate["cross_domain_e2e"]["transport_qualification"]
+    assert aggregate["schema_version"] == "acceptance-aggregate.v4"
+    assert aggregate["cross_domain_e2e"]["status"] == "passed"
+    assert reference["status"] == "passed"
+    assert reference["result_sha256"] == hashlib.sha256(qualification_path.read_bytes()).hexdigest()
+
+
+def test_aggregate_rejects_transport_for_another_run(tmp_path: Path) -> None:
+    context_path = run_context(tmp_path)
+    transport_qualification(tmp_path, relationship="link", consumer_link=2)
+    qualification_path = tmp_path / "transport-qualification.json"
+    qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+    qualification["run_id"] = "run-01234567-89ab-4def-8123-456789abcdea"
+    write_json(qualification_path, qualification)
+
+    with pytest.raises(BundleValidationError, match="another run"):
+        aggregate_results(
+            run_context_path=context_path,
+            result_paths=[
+                result(tmp_path, "camera-domain", "0"),
+                result(tmp_path, "control-domain", "1"),
+            ],
+            transport_qualification_path=qualification_path,
+            output_path=tmp_path / "aggregate.json",
+        )
+
+
+def test_aggregate_rejects_transport_with_another_domain_set(tmp_path: Path) -> None:
+    context_path = run_context(
+        tmp_path,
+        domains=[{"domain_id": "camera-domain", "role": "sensor"}],
+    )
+    transport_qualification(tmp_path, relationship="link", consumer_link=2)
+
+    with pytest.raises(BundleValidationError, match="every run domain"):
+        aggregate_results(
+            run_context_path=context_path,
+            result_paths=[result(tmp_path, "camera-domain", "0")],
+            transport_qualification_path=tmp_path / "transport-qualification.json",
+            output_path=tmp_path / "aggregate.json",
+        )
 
 
 def test_aggregate_fails_when_registered_domain_has_no_result(tmp_path: Path) -> None:
@@ -498,24 +516,39 @@ def test_aggregate_rejects_result_changed_after_loading(
         )
 
 
-def test_trace_aggregate_proves_span_link(tmp_path: Path) -> None:
-    aggregate = trace_aggregate(
-        tmp_path,
-        relationship="link",
-        consumer_link=2,
+def test_aggregate_rejects_transport_changed_after_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context_path = run_context(tmp_path)
+    transport_qualification(tmp_path, relationship="link", consumer_link=2)
+    qualification_path = tmp_path / "transport-qualification.json"
+    original_load_document = load_document
+
+    def load_and_mutate(path: str | Path, **kwargs: Any) -> Any:
+        document = original_load_document(path, **kwargs)
+        if Path(path).resolve() == qualification_path.resolve():
+            qualification_path.write_text("{}\n", encoding="utf-8")
+        return document
+
+    monkeypatch.setattr(
+        "robotics_acceptance_harness.aggregate.load_document",
+        load_and_mutate,
     )
 
-    assert aggregate["schema_version"] == "acceptance-aggregate.v3"
-    assert aggregate["cross_domain_e2e"]["status"] == "passed"
-    assert aggregate["causal_chains"][0]["root_trace_id"] == TRACE_ID
-    assert aggregate["causal_chains"][0]["hops"][0]["relationship"] == "link"
-    assert aggregate["channel_observations"][0]["status"] == "passed"
-    channel = aggregate["channel_contracts"][0]
-    assert channel["source_domain_id"] == "camera-domain"
-    assert channel["destination_domain_id"] == "control-domain"
+    with pytest.raises(BundleValidationError, match="changed during aggregation"):
+        aggregate_results(
+            run_context_path=context_path,
+            result_paths=[
+                result(tmp_path, "camera-domain", "0"),
+                result(tmp_path, "control-domain", "1"),
+            ],
+            transport_qualification_path=qualification_path,
+            output_path=tmp_path / "aggregate.json",
+        )
 
 
-def test_transport_qualification_passes_without_domain_execution(tmp_path: Path) -> None:
+def test_transport_qualification_proves_span_link(tmp_path: Path) -> None:
     result = transport_qualification(
         tmp_path,
         relationship="link",
@@ -524,9 +557,14 @@ def test_transport_qualification_passes_without_domain_execution(tmp_path: Path)
 
     assert result["schema_version"] == "transport-qualification-result.v1"
     assert result["verdict"]["status"] == "passed"
+    assert result["causal_chains"][0]["root_trace_id"] == TRACE_ID
+    assert result["causal_chains"][0]["hops"][0]["relationship"] == "link"
+    assert result["channel_observations"][0]["status"] == "passed"
     assert "acceptance_run_sha256" not in result
     assert "per_domain_results" not in result
-    assert result["channel_observations"][0]["status"] == "passed"
+    channel = result["channel_contracts"][0]
+    assert channel["source_domain_id"] == "camera-domain"
+    assert channel["destination_domain_id"] == "control-domain"
 
 
 def test_transport_qualification_fails_measured_delivery_loss(tmp_path: Path) -> None:
@@ -541,36 +579,36 @@ def test_transport_qualification_fails_measured_delivery_loss(tmp_path: Path) ->
     assert result["channel_observations"][0]["status"] == "failed"
 
 
-def test_trace_aggregate_proves_parent_chain(tmp_path: Path) -> None:
-    aggregate = trace_aggregate(
+def test_transport_qualification_proves_parent_chain(tmp_path: Path) -> None:
+    result = transport_qualification(
         tmp_path,
         relationship="parent",
         consumer_parent=2,
     )
 
-    assert aggregate["cross_domain_e2e"]["status"] == "passed"
-    assert aggregate["causal_chains"][0]["hops"][0]["relationship"] == "parent"
+    assert result["verdict"]["status"] == "passed"
+    assert result["causal_chains"][0]["hops"][0]["relationship"] == "parent"
 
 
-def test_trace_aggregate_evaluates_multiple_declared_chains(tmp_path: Path) -> None:
-    aggregate = trace_aggregate(
+def test_transport_qualification_evaluates_multiple_declared_chains(tmp_path: Path) -> None:
+    result = transport_qualification(
         tmp_path,
         relationship="link",
         consumer_link=2,
         chain_count=2,
     )
 
-    assert aggregate["cross_domain_e2e"]["status"] == "passed"
-    assert aggregate["cross_domain_e2e"]["chain_count"] == 2
-    assert aggregate["cross_domain_e2e"]["passed_chain_count"] == 2
-    assert len(aggregate["causal_chain_contracts"]) == 2
+    assert result["verdict"]["status"] == "passed"
+    assert result["verdict"]["chain_count"] == 2
+    assert result["verdict"]["passed_chain_count"] == 2
+    assert len(result["causal_chain_contracts"]) == 2
 
 
-def test_trace_aggregate_rejects_span_identity_reused_across_domains(
+def test_transport_qualification_rejects_span_identity_reused_across_domains(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(TraceInputError, match="appears in domains"):
-        trace_aggregate(
+        transport_qualification(
             tmp_path,
             relationship="link",
             consumer_link=2,
@@ -578,32 +616,32 @@ def test_trace_aggregate_rejects_span_identity_reused_across_domains(
         )
 
 
-def test_trace_aggregate_fails_on_broken_span_link(tmp_path: Path) -> None:
-    aggregate = trace_aggregate(
+def test_transport_qualification_fails_on_broken_span_link(tmp_path: Path) -> None:
+    result = transport_qualification(
         tmp_path,
         relationship="link",
         consumer_link=4,
     )
 
-    assert aggregate["cross_domain_e2e"]["status"] == "failed"
-    assert aggregate["causal_chains"][0]["status"] == "failed"
-    violations = aggregate["causal_chains"][0]["violations"]
+    assert result["verdict"]["status"] == "failed"
+    assert result["causal_chains"][0]["status"] == "failed"
+    violations = result["causal_chains"][0]["violations"]
     assert violations[0]["code"] == "relationship_mismatch"
 
 
-def test_trace_aggregate_writes_contract_valid_failed_channel_observation(
+def test_transport_qualification_writes_contract_valid_failed_channel_observation(
     tmp_path: Path,
 ) -> None:
-    aggregate = trace_aggregate(
+    result = transport_qualification(
         tmp_path,
         relationship="link",
         consumer_link=2,
         consumer_message_id="message-2",
     )
 
-    assert aggregate["cross_domain_e2e"]["status"] == "failed"
+    assert result["verdict"]["status"] == "failed"
     observation = json.loads(
-        (tmp_path / "observations" / "sensor.control.json").read_text(encoding="utf-8")
+        (tmp_path / "transport-observations" / "sensor.control.json").read_text(encoding="utf-8")
     )
     assert observation["status"] == "failed"
     assert {item["code"] for item in observation["violations"]} == {

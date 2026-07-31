@@ -7,7 +7,7 @@ release may change Python APIs, CLI behavior, and accepted contract versions;
 patch releases remain backward compatible. The documented CLI, exit codes,
 pytest fixtures, and emitted documents are public interfaces.
 
-The distribution requires `robotics-runtime-contracts>=0.11.0,<0.12`.
+The distribution requires `robotics-runtime-contracts>=0.12.0,<0.13`.
 Development uses the sibling checkout through `tool.uv.sources`; published
 wheel metadata contains only this version range. `uv build --no-sources` is the
 packaging gate.
@@ -20,7 +20,7 @@ packaging gate.
 | Runtime manifest | `runtime-manifest.v1` |
 | Result | `acceptance-result.v4` |
 | Run context | `acceptance-run.v1` |
-| Per-domain and cross-domain aggregate | `acceptance-aggregate.v3` |
+| Per-domain and cross-domain aggregate | `acceptance-aggregate.v4` |
 | Evidence index | `evidence-index.v2` |
 
 Unknown identifiers fail closed. Published schema bytes remain immutable; an
@@ -31,8 +31,9 @@ permanent compatibility layer. Historical tags remain the archive.
 `verify` requires `--scenario`, `--runtime`, `--run-id`, `--domain-id`,
 `--run-context`, `--evidence-index`, `--otel-metrics`,
 `--measurement-complete`, and `--output`.
-Aggregation accepts only canonical v4 domain results and emits one v3 document
-whose cross-domain verdict is either `unevaluated` or evaluated.
+Aggregation accepts canonical v4 domain results and an optional canonical
+transport qualification. It emits one v4 aggregate whose cross-domain verdict
+is either `unevaluated` or a digest-pinned transport reference.
 
 ## Runtime Baseline
 
