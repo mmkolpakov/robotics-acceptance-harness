@@ -260,6 +260,3 @@ class RosGraphObserver:
 
     def __exit__(self, _type: object, _value: object, _traceback: object) -> None:
         self.close()
-
-
-__all__ = ["RosGraphObserver", "RosObserverError"]

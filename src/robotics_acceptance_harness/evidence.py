@@ -163,6 +163,3 @@ def load_evidence_index(
         MappingProxyType(local_files),
         tuple(summaries),
     )
-
-
-__all__ = ["EvidenceValidationError", "VerifiedEvidence", "load_evidence_index"]

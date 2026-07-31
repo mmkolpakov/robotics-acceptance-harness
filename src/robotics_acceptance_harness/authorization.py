@@ -220,6 +220,3 @@ def evaluate_physical_authorization(
     if verified_at > now:
         issues.append(AuthorizationIssue("$.verification.verified_at", "must not be in the future"))
     return tuple(issues)
-
-
-__all__ = ["AuthorizationIssue", "evaluate_physical_authorization"]

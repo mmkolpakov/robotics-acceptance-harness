@@ -183,11 +183,3 @@ def load_otlp_json_metrics(
                                 f"invalid OTLP metric at {source}:{line_number}: {error}"
                             ) from error
     return tuple(samples)
-
-
-__all__ = [
-    "MetricInputError",
-    "load_otlp_json_metrics",
-    "otlp_attribute_value",
-    "otlp_attributes",
-]

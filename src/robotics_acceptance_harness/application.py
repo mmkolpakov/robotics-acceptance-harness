@@ -413,6 +413,3 @@ def run_verification(
     result_path = write_contract_json(result, destination / "acceptance-result.json")
     junit_path = write_junit_xml(result, destination / "junit.xml")
     return VerificationOutputs(result, result_path, junit_path)
-
-
-__all__ = ["VerificationError", "VerificationOutputs", "explain_bundle", "run_verification"]

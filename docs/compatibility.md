@@ -28,8 +28,9 @@ incompatible change receives a new identifier. Before `1.0.0`, obsolete
 contract readers are removed from the current package instead of becoming a
 permanent compatibility layer. Historical tags remain the archive.
 
-`verify` requires `--run-id`, `--domain-id`, `--run-context`,
-`--evidence-index`, `--otel-metrics`, and `--measurement-complete`.
+`verify` requires `--scenario`, `--runtime`, `--run-id`, `--domain-id`,
+`--run-context`, `--evidence-index`, `--otel-metrics`,
+`--measurement-complete`, and `--output`.
 Aggregation accepts only canonical v4 domain results and emits one v3 document
 whose cross-domain verdict is either `unevaluated` or evaluated.
 
