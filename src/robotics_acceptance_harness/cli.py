@@ -204,7 +204,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 transport_qualification_path=arguments.transport_qualification,
             )
             aggregate = json.loads(output.read_text(encoding="utf-8"))
-            return _report_status(output, aggregate["per_domain_aggregate"], "aggregate")
+            status = aggregate["cross_domain_e2e"]["status"]
+            if status == "unevaluated":
+                status = aggregate["per_domain_aggregate"]
+            return _report_status(output, status, "aggregate")
 
         if arguments.command == "transport-evaluate":
             output = evaluate_transport_qualification(

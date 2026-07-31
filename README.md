@@ -62,7 +62,7 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts>=0.12.0,<0.13` |
+| Contracts | `robotics-runtime-contracts>=0.12.1,<0.13` |
 | Scenarios | `acceptance-scenario.v4` |
 | Results | `acceptance-result.v4` |
 | Aggregates | `acceptance-aggregate.v4` |
@@ -77,11 +77,11 @@ this package alone does not qualify a target.
 
 ## Install
 
-Install the attested `v0.13.0` release with its exact contracts baseline:
+Install the attested `v0.13.1` release with its exact contracts baseline:
 
 ```bash
-CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.12.0/robotics_runtime_contracts-0.12.0-py3-none-any.whl
-HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.13.0/robotics_acceptance_harness-0.13.0-py3-none-any.whl
+CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.12.1/robotics_runtime_contracts-0.12.1-py3-none-any.whl
+HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.13.1/robotics_acceptance_harness-0.13.1-py3-none-any.whl
 uv tool install \
   --with "${CONTRACTS}" \
   "${HARNESS}"

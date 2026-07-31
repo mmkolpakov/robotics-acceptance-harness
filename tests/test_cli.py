@@ -162,7 +162,12 @@ def test_aggregate_forwards_transport_qualification(
     def fake_aggregate_results(**arguments: object) -> Path:
         captured.update(arguments)
         output.write_text(
-            json.dumps({"per_domain_aggregate": "passed"}),
+            json.dumps(
+                {
+                    "per_domain_aggregate": "passed",
+                    "cross_domain_e2e": {"status": "failed"},
+                }
+            ),
             encoding="utf-8",
         )
         return output
@@ -186,9 +191,9 @@ def test_aggregate_forwards_transport_qualification(
         ]
     )
 
-    assert exit_code == 0
+    assert exit_code == 1
     assert captured["transport_qualification_path"] == "transport-qualification.json"
-    assert json.loads(capsys.readouterr().out)["status"] == "passed"
+    assert json.loads(capsys.readouterr().out)["status"] == "failed"
 
 
 def test_transport_evaluate_maps_domain_evidence_and_reports_verdict(
