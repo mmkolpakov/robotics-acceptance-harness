@@ -227,6 +227,26 @@ def test_ros_observer_context_manager_detaches() -> None:
     assert node.destroyed
 
 
+def test_ros_observer_skips_action_graph_outside_scenario_scope() -> None:
+    def unexpected_query(*_args: object) -> None:
+        pytest.fail("unexpected action graph query")
+
+    node = FakeNode()
+    modules = fake_modules(node)
+    modules["rclpy.action"] = SimpleNamespace(
+        get_action_server_names_and_types_by_node=unexpected_query,
+        get_action_client_names_and_types_by_node=unexpected_query,
+    )
+    graph = {"topics": [], "services": [], "actions": [], "lifecycle_nodes": []}
+
+    with RosGraphObserver(
+        graph,
+        observe_clock=False,
+        module_loader=modules.__getitem__,
+    ) as observer:
+        assert observer.snapshot().actions == {}
+
+
 def test_ros_observer_queries_forbidden_names_without_subscribing() -> None:
     node = FakeNode()
     modules = fake_modules(node)
