@@ -76,7 +76,22 @@ joins an existing `ROS_DOMAIN_ID`. Hardware support is qualified by the runtime
 infrastructure for an exact source revision, image digest, and device; installing
 this package alone does not qualify a target.
 
-## Development Install
+## Install
+
+Install the attested `v0.12.0` release with its exact contracts baseline:
+
+```bash
+CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.11.0/robotics_runtime_contracts-0.11.0-py3-none-any.whl
+HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.12.0/robotics_acceptance_harness-0.12.0-py3-none-any.whl
+uv tool install \
+  --with "${CONTRACTS}#sha256=71e156210b0f16571b9f734926b84f0516100e30bea46369ae798371990bb5b9" \
+  "${HARNESS}#sha256=e2229e134a6a3ca1bccf5d216369c51f56db7dd0a68dc8e24ff11f138669a255"
+```
+
+Release provenance verification is described in
+[`docs/supply-chain.md`](docs/supply-chain.md).
+
+For development:
 
 ```bash
 git clone https://github.com/mmkolpakov/robotics-runtime-contracts.git
@@ -107,6 +122,17 @@ The command validates and cross-checks both documents, then prints the resolved
 execution mode, workload, ROS graph size, evidence policy, and content digests.
 The known-good fixture reports `"policy": "accepted-simulation"` and exits
 with code `0`.
+
+Create the immutable context shared by every domain in one execution:
+
+```bash
+robotics-acceptance create-run \
+  --scenario /run/robotics/scenario.yaml \
+  --output /run/robotics/acceptance-run.json \
+  --domain primary=observer \
+  --time-authority sim_clock \
+  --time-source gazebo-clock
+```
 
 ## Verify an Execution
 

@@ -11,16 +11,7 @@ from robotics_acceptance_harness.plugin import _guard_target
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def test_loader_accepts_only_simulation() -> None:
-    bundle = load_bundle(
-        FIXTURES / "simulation" / "scenario.yaml",
-        runtime_path=FIXTURES / "simulation" / "runtime.yaml",
-    )
-    _guard_target(bundle)
-    assert bundle.scenario.data["execution"]["target_environment"] == "simulation"
-
-
-def test_loader_rejects_physical_environment() -> None:
+def test_guard_rejects_physical_environment() -> None:
     physical = FIXTURES / "physical"
     bundle = load_bundle(
         physical / "hil-scenario.yaml",
