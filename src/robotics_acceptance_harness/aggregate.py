@@ -11,6 +11,7 @@ from robotics_acceptance_harness import __version__
 from robotics_acceptance_harness.documents import BundleValidationError, load_document
 from robotics_acceptance_harness.evidence import load_evidence_index
 from robotics_acceptance_harness.result import format_utc_datetime, write_contract_json
+from robotics_acceptance_harness.status import worst_status
 from robotics_acceptance_harness.traces import (
     CausalHop,
     ChainViolation,
@@ -21,25 +22,12 @@ from robotics_acceptance_harness.traces import (
 )
 
 
-def _domain_aggregate(statuses: set[str]) -> str:
-    return (
-        "error"
-        if "error" in statuses
-        else "failed"
-        if "failed" in statuses
-        else "incomplete"
-        if "incomplete" in statuses
-        else "cancelled"
-        if "cancelled" in statuses
-        else "passed"
-    )
-
-
 def aggregate_results(
     *,
     run_context_path: str | Path,
     result_paths: Sequence[str | Path],
     output_path: str | Path,
+    transport_qualification_path: str | Path | None = None,
     aggregate_id: str | None = None,
     generated_at: datetime | None = None,
 ) -> Path:
@@ -58,6 +46,19 @@ def aggregate_results(
         )
         for path in resolved_result_paths
     ]
+    qualification_path = (
+        Path(transport_qualification_path).expanduser().resolve()
+        if transport_qualification_path is not None
+        else None
+    )
+    qualification = (
+        load_document(
+            qualification_path,
+            expected_schemas={"transport-qualification-result.v1"},
+        )
+        if qualification_path is not None
+        else None
+    )
     expected_domains = {item["domain_id"] for item in context.data["domains"]}
     observed_domains = {item.data["domain_id"] for item in results}
     if observed_domains != expected_domains:
@@ -90,9 +91,38 @@ def aggregate_results(
                 "result uses another time authority",
             )
 
-    aggregate_status = _domain_aggregate({str(item.data["status"]) for item in results})
+    aggregate_status = worst_status({str(item.data["status"]) for item in results})
+    if qualification is None:
+        cross_domain: dict[str, Any] = {
+            "status": "unevaluated",
+            "reason": "transport_qualification_not_provided",
+        }
+    else:
+        if qualification.data["run_id"] != context.data["run_id"]:
+            raise BundleValidationError(
+                "$.transport_qualification.run_id",
+                "transport qualification belongs to another run",
+            )
+        qualification_domains = {item["domain_id"] for item in qualification.data["trace_evidence"]}
+        if qualification_domains != expected_domains:
+            raise BundleValidationError(
+                "$.transport_qualification.trace_evidence",
+                "transport qualification must cover every run domain exactly once",
+            )
+        qualification_status = str(qualification.data["verdict"]["status"])
+        cross_domain = {
+            "status": worst_status(
+                {aggregate_status, qualification_status},
+                collapse_cancelled=True,
+            ),
+            "transport_qualification": {
+                "qualification_id": qualification.data["qualification_id"],
+                "result_sha256": qualification.sha256,
+                "status": qualification_status,
+            },
+        }
     aggregate: dict[str, Any] = {
-        "schema_version": "acceptance-aggregate.v3",
+        "schema_version": "acceptance-aggregate.v4",
         "aggregate_id": aggregate_id or f"aggregate-{uuid4()}",
         "run_id": context.data["run_id"],
         "acceptance_run_sha256": context.sha256,
@@ -107,10 +137,7 @@ def aggregate_results(
             for result in sorted(results, key=lambda item: item.data["domain_id"])
         ],
         "per_domain_aggregate": aggregate_status,
-        "cross_domain_e2e": {
-            "status": "unevaluated",
-            "reason": "trace_evidence_not_evaluated",
-        },
+        "cross_domain_e2e": cross_domain,
     }
     context_digest = sha256(context_path.read_bytes()).hexdigest()
     if context_digest != context.sha256:
@@ -124,6 +151,15 @@ def aggregate_results(
                 f"$.per_domain_results[{index}].result_sha256",
                 "domain result changed during aggregation",
             )
+    if (
+        qualification is not None
+        and qualification_path is not None
+        and sha256(qualification_path.read_bytes()).hexdigest() != qualification.sha256
+    ):
+        raise BundleValidationError(
+            "$.transport_qualification.result_sha256",
+            "transport qualification changed during aggregation",
+        )
     return write_contract_json(aggregate, output_path)
 
 
@@ -186,59 +222,21 @@ def _hop_document(hop: CausalHop) -> dict[str, Any]:
     }
 
 
-def _cross_domain_status(
-    per_domain_status: str,
-    channel_statuses: set[str],
-    chain_statuses: set[str],
-) -> str:
-    statuses = {per_domain_status, *chain_statuses, *channel_statuses}
-    if "error" in statuses:
-        return "error"
-    if "failed" in statuses:
-        return "failed"
-    if statuses & {"incomplete", "cancelled"}:
-        return "incomplete"
-    return "passed"
-
-
-def _evaluate_trace(
+def evaluate_transport_qualification(
     *,
-    run_context_path: str | Path | None,
-    base_aggregate_path: str | Path | None,
-    run_id: str | None,
+    run_id: str,
     causal_chain_paths: Sequence[str | Path],
     channel_contract_paths: Sequence[str | Path],
     trace_paths: Mapping[str, str | Path],
     evidence_index_paths: Mapping[str, str | Path],
     observation_output_dir: str | Path,
     output_path: str | Path,
-    aggregate_id: str | None = None,
     qualification_id: str | None = None,
     generated_at: datetime | None = None,
 ) -> Path:
-    """Evaluate measured channel delivery and cross-domain causality."""
+    """Evaluate transport evidence without inventing a domain execution."""
 
     evaluated_at = generated_at or datetime.now(UTC)
-    if (run_context_path is None) != (base_aggregate_path is None):
-        raise ValueError("run context and base aggregate must be provided together")
-    context = (
-        load_document(run_context_path, expected_schemas={"acceptance-run.v1"})
-        if run_context_path is not None
-        else None
-    )
-    base = (
-        load_document(base_aggregate_path, expected_schemas={"acceptance-aggregate.v3"})
-        if base_aggregate_path is not None
-        else None
-    )
-    if context is None:
-        if run_id is None:
-            raise ValueError("transport qualification requires run_id")
-        effective_run_id = run_id
-    else:
-        if run_id is not None and run_id != context.data["run_id"]:
-            raise BundleValidationError("$.run_id", "run_id differs from the run context")
-        effective_run_id = str(context.data["run_id"])
     if not causal_chain_paths:
         raise BundleValidationError(
             "$.causal_chain_contracts",
@@ -253,17 +251,7 @@ def _evaluate_trace(
             "$.causal_chain_contracts",
             "chain_id values must be unique",
         )
-    if base is not None and context is not None:
-        if base.data["run_id"] != context.data["run_id"]:
-            raise BundleValidationError("$.run_id", "base aggregate belongs to another run")
-        if base.data["acceptance_run_sha256"] != context.sha256:
-            raise BundleValidationError(
-                "$.acceptance_run_sha256",
-                "base aggregate identifies another run context",
-            )
-        expected_domains = tuple(str(item["domain_id"]) for item in context.data["domains"])
-    else:
-        expected_domains = tuple(sorted(trace_paths))
+    expected_domains = tuple(sorted(trace_paths))
     expected_domain_set = set(expected_domains)
     if set(trace_paths) != expected_domain_set:
         raise BundleValidationError(
@@ -346,7 +334,7 @@ def _evaluate_trace(
     for domain_id in sorted(expected_domains):
         verified = load_evidence_index(
             evidence_index_paths[domain_id],
-            expected_run_id=effective_run_id,
+            expected_run_id=run_id,
         )
         trace_path = Path(trace_paths[domain_id]).expanduser().resolve()
         link = verified.local_files.get(trace_path)
@@ -364,7 +352,7 @@ def _evaluate_trace(
         )
         spans_by_domain[domain_id] = load_otlp_json_traces(
             trace_path,
-            expected_run_id=effective_run_id,
+            expected_run_id=run_id,
             expected_domain_id=domain_id,
             expected_sha256=str(link["sha256"]),
         )
@@ -397,7 +385,7 @@ def _evaluate_trace(
         observation_document = {
             "schema_version": "zenoh-channel-observation.v1",
             "observation_id": f"observation-{uuid4()}",
-            "run_id": effective_run_id,
+            "run_id": run_id,
             "channel_id": channel_id,
             "channel_contract_sha256": contract.sha256,
             "started_at": format_utc_datetime(started_at),
@@ -486,11 +474,9 @@ def _evaluate_trace(
         "channel_observations": observation_references,
         "causal_chains": chain_documents,
     }
-    domain_status = str(base.data["per_domain_aggregate"]) if base is not None else "passed"
-    transport_status = _cross_domain_status(
-        domain_status,
-        observation_statuses,
-        chain_statuses,
+    transport_status = worst_status(
+        {"passed", *observation_statuses, *chain_statuses},
+        collapse_cancelled=True,
     )
     verdict = {
         "status": transport_status,
@@ -502,93 +488,12 @@ def _evaluate_trace(
         "error_chain_count": sum(item["status"] == "error" for item in chain_documents),
     }
 
-    if base is None:
-        result: dict[str, Any] = {
-            "schema_version": "transport-qualification-result.v1",
-            "qualification_id": qualification_id or f"qualification-{uuid4()}",
-            "run_id": effective_run_id,
-            "generated_at": format_utc_datetime(evaluated_at),
-            **common,
-            "verdict": verdict,
-        }
-        return write_contract_json(result, output_path)
-
-    aggregate: dict[str, Any] = {
-        "schema_version": "acceptance-aggregate.v3",
-        "aggregate_id": aggregate_id or f"aggregate-{uuid4()}",
-        "run_id": base.data["run_id"],
-        "acceptance_run_sha256": base.data["acceptance_run_sha256"],
-        "base_aggregate_sha256": base.sha256,
+    result: dict[str, Any] = {
+        "schema_version": "transport-qualification-result.v1",
+        "qualification_id": qualification_id or f"qualification-{uuid4()}",
+        "run_id": run_id,
         "generated_at": format_utc_datetime(evaluated_at),
-        "per_domain_results": [dict(item) for item in base.data["per_domain_results"]],
-        "per_domain_aggregate": domain_status,
         **common,
-        "cross_domain_e2e": verdict,
+        "verdict": verdict,
     }
-    assert base_aggregate_path is not None
-    base_path = Path(base_aggregate_path).expanduser().resolve()
-    if sha256(base_path.read_bytes()).hexdigest() != base.sha256:
-        raise BundleValidationError(
-            "$.base_aggregate_sha256",
-            "base aggregate changed during trace evaluation",
-        )
-    return write_contract_json(aggregate, output_path)
-
-
-def evaluate_trace_aggregate(
-    *,
-    run_context_path: str | Path,
-    base_aggregate_path: str | Path,
-    causal_chain_paths: Sequence[str | Path],
-    channel_contract_paths: Sequence[str | Path],
-    trace_paths: Mapping[str, str | Path],
-    evidence_index_paths: Mapping[str, str | Path],
-    observation_output_dir: str | Path,
-    output_path: str | Path,
-    aggregate_id: str | None = None,
-    generated_at: datetime | None = None,
-) -> Path:
-    """Extend a domain aggregate with measured channel and causal-trace evidence."""
-
-    return _evaluate_trace(
-        run_context_path=run_context_path,
-        base_aggregate_path=base_aggregate_path,
-        run_id=None,
-        causal_chain_paths=causal_chain_paths,
-        channel_contract_paths=channel_contract_paths,
-        trace_paths=trace_paths,
-        evidence_index_paths=evidence_index_paths,
-        observation_output_dir=observation_output_dir,
-        output_path=output_path,
-        aggregate_id=aggregate_id,
-        generated_at=generated_at,
-    )
-
-
-def evaluate_transport_qualification(
-    *,
-    run_id: str,
-    causal_chain_paths: Sequence[str | Path],
-    channel_contract_paths: Sequence[str | Path],
-    trace_paths: Mapping[str, str | Path],
-    evidence_index_paths: Mapping[str, str | Path],
-    observation_output_dir: str | Path,
-    output_path: str | Path,
-    qualification_id: str | None = None,
-    generated_at: datetime | None = None,
-) -> Path:
-    """Evaluate transport evidence without inventing a domain execution."""
-
-    return _evaluate_trace(
-        run_context_path=None,
-        base_aggregate_path=None,
-        run_id=run_id,
-        causal_chain_paths=causal_chain_paths,
-        channel_contract_paths=channel_contract_paths,
-        trace_paths=trace_paths,
-        evidence_index_paths=evidence_index_paths,
-        observation_output_dir=observation_output_dir,
-        output_path=output_path,
-        qualification_id=qualification_id,
-        generated_at=generated_at,
-    )
+    return write_contract_json(result, output_path)

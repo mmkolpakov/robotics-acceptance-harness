@@ -17,6 +17,7 @@ from robotics_acceptance_harness.forbidden_graph import ForbiddenGraphObservatio
 from robotics_acceptance_harness.hardware_timing import HardwareTimingObservation
 from robotics_acceptance_harness.metrics import AssertionEvaluation
 from robotics_acceptance_harness.readiness import GraphSnapshot, ReadinessResult
+from robotics_acceptance_harness.status import worst_status
 from robotics_acceptance_harness.time_authority import TimeAuthorityObservation
 from robotics_acceptance_harness.timing import TimingObservation
 
@@ -75,15 +76,6 @@ def _lifecycle_states(snapshot: GraphSnapshot) -> list[dict[str, Any]]:
         }
         for name, observation in sorted(snapshot.lifecycle_nodes.items())
     ]
-
-
-def _status(evaluations: Sequence[AssertionEvaluation]) -> str:
-    statuses = {evaluation.status for evaluation in evaluations}
-    if "error" in statuses:
-        return "error"
-    if "failed" in statuses:
-        return "failed"
-    return "passed"
 
 
 def _forbidden_graph_result(observation: ForbiddenGraphObservation) -> dict[str, Any]:
@@ -167,7 +159,7 @@ def build_acceptance_result(
     ):
         raise ValueError("simulation acceptance-result.v4 does not accept hardware timing")
 
-    result_status = _status(assertions)
+    result_status = worst_status({evaluation.status for evaluation in assertions})
     if result_status == "passed" and (
         not forbidden_graph.passed
         or (hardware_timing is not None and not hardware_timing.within_policy)

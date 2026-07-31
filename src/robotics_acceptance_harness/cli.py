@@ -9,7 +9,6 @@ from pathlib import Path
 from robotics_acceptance_harness import __version__
 from robotics_acceptance_harness.aggregate import (
     aggregate_results,
-    evaluate_trace_aggregate,
     evaluate_transport_qualification,
 )
 from robotics_acceptance_harness.application import explain_bundle, run_verification
@@ -124,14 +123,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     aggregate.add_argument("--run-context", required=True, metavar="PATH")
     aggregate.add_argument("--result", required=True, action="append", metavar="PATH")
-
-    trace_evaluate = subparsers.add_parser(
-        "trace-evaluate",
-        help="Extend a domain aggregate with channel delivery and causal-trace evidence.",
+    aggregate.add_argument(
+        "--transport-qualification",
+        metavar="PATH",
+        help="Optional transport-qualification-result.v1 for the same run.",
     )
-    trace_evaluate.add_argument("--run-context", required=True, metavar="PATH")
-    trace_evaluate.add_argument("--base-aggregate", required=True, metavar="PATH")
-    _add_trace_arguments(trace_evaluate)
 
     transport_evaluate = subparsers.add_parser(
         "transport-evaluate",
@@ -179,6 +175,11 @@ def _bundle(arguments: argparse.Namespace) -> DocumentBundle:
     )
 
 
+def _report_status(output: Path, status: str, key: str) -> int:
+    print(json.dumps({key: str(output), "status": status}, sort_keys=True))
+    return 0 if status == "passed" else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
@@ -200,30 +201,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_context_path=arguments.run_context,
                 result_paths=arguments.result,
                 output_path=arguments.output,
+                transport_qualification_path=arguments.transport_qualification,
             )
             aggregate = json.loads(output.read_text(encoding="utf-8"))
-            status = aggregate["per_domain_aggregate"]
-            print(json.dumps({"aggregate": str(output), "status": status}, sort_keys=True))
-            return 0 if status == "passed" else 1
-
-        if arguments.command == "trace-evaluate":
-            output = evaluate_trace_aggregate(
-                run_context_path=arguments.run_context,
-                base_aggregate_path=arguments.base_aggregate,
-                causal_chain_paths=arguments.causal_chain,
-                channel_contract_paths=arguments.channel_contract,
-                trace_paths=_keyed_values(arguments.trace, "--trace"),
-                evidence_index_paths=_keyed_values(
-                    arguments.evidence_index,
-                    "--evidence-index",
-                ),
-                observation_output_dir=arguments.observation_output,
-                output_path=arguments.output,
-            )
-            aggregate = json.loads(output.read_text(encoding="utf-8"))
-            status = aggregate["cross_domain_e2e"]["status"]
-            print(json.dumps({"aggregate": str(output), "status": status}, sort_keys=True))
-            return 0 if status == "passed" else 1
+            return _report_status(output, aggregate["per_domain_aggregate"], "aggregate")
 
         if arguments.command == "transport-evaluate":
             output = evaluate_transport_qualification(
@@ -239,14 +220,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_path=arguments.output,
             )
             result = json.loads(output.read_text(encoding="utf-8"))
-            status = result["verdict"]["status"]
-            print(
-                json.dumps(
-                    {"qualification": str(output), "status": status},
-                    sort_keys=True,
-                )
-            )
-            return 0 if status == "passed" else 1
+            return _report_status(output, result["verdict"]["status"], "qualification")
 
         bundle = _bundle(arguments)
         if arguments.command == "explain":

@@ -91,42 +91,37 @@ def test_permit_must_be_active_when_bundle_is_loaded() -> None:
         _valid_bundle(now=datetime(2026, 7, 12, 10, 11, tzinfo=UTC))
 
 
-def test_verified_operator_must_match_permit(tmp_path: Path) -> None:
-    with pytest.raises(BundleValidationError) as caught:
-        _mutated_verification_bundle(
-            tmp_path,
+@pytest.mark.parametrize(
+    ("mutation", "expected_path"),
+    [
+        pytest.param(
             lambda verification: verification["signers"][0].update(
                 {"identity": "different@example.org"}
             ),
-        )
-
-    assert caught.value.json_path == "$.verification.signers.operator.identity"
-
-
-def test_verified_target_identity_must_match_permit(tmp_path: Path) -> None:
-    with pytest.raises(BundleValidationError) as caught:
-        _mutated_verification_bundle(
-            tmp_path,
+            "$.verification.signers.operator.identity",
+            id="operator",
+        ),
+        pytest.param(
             lambda verification: verification["target"].update({"identity_sha256": "b" * 64}),
-        )
-
-    assert caught.value.json_path == "$.verification.target.identity_sha256"
-
-
-def test_verified_trust_policy_must_match_scenario(tmp_path: Path) -> None:
+            "$.verification.target.identity_sha256",
+            id="target",
+        ),
+        pytest.param(
+            lambda verification: verification.update({"trust_policy_sha256": "b" * 64}),
+            "$.verification.trust_policy_sha256",
+            id="trust-policy",
+        ),
+    ],
+)
+def test_verified_authorization_must_match_permit_and_scenario(
+    tmp_path: Path,
+    mutation: Callable[[dict[str, Any]], None],
+    expected_path: str,
+) -> None:
     with pytest.raises(BundleValidationError) as caught:
-        _mutated_verification_bundle(
-            tmp_path,
-            lambda verification: verification.update(
-                {
-                    "trust_policy_sha256": (
-                        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                    )
-                }
-            ),
-        )
+        _mutated_verification_bundle(tmp_path, mutation)
 
-    assert caught.value.json_path == "$.verification.trust_policy_sha256"
+    assert caught.value.json_path == expected_path
 
 
 def test_runtime_target_identity_must_match_permit(tmp_path: Path) -> None:

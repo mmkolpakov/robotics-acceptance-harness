@@ -5,7 +5,6 @@ import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -14,7 +13,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
 
-from robotics_acceptance_harness.otel import otlp_attributes
+from robotics_acceptance_harness.otel import otlp_attributes, read_otlp_json_lines
 
 MESSAGE_ID_ATTRIBUTE = "messaging.message.id"
 _OTLP_IDENTIFIER_LENGTHS = {
@@ -147,20 +146,7 @@ def load_otlp_json_traces(
 ) -> tuple[TraceSpan, ...]:
     """Read official newline-delimited OTLP/JSON Collector trace output."""
 
-    source = Path(path).expanduser().resolve()
-    try:
-        payload_bytes = source.read_bytes()
-    except OSError as error:
-        raise TraceInputError(f"cannot read {source}: {error}") from error
-    observed_sha256 = sha256(payload_bytes).hexdigest()
-    if expected_sha256 is not None and observed_sha256 != expected_sha256:
-        raise TraceInputError(
-            f"{source} digest differs: expected {expected_sha256}; observed {observed_sha256}"
-        )
-    try:
-        lines = payload_bytes.decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise TraceInputError(f"cannot decode {source} as UTF-8: {error}") from error
+    source, lines = read_otlp_json_lines(path, expected_sha256, TraceInputError)
 
     spans: list[TraceSpan] = []
     seen: set[tuple[str, str]] = set()
