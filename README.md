@@ -83,8 +83,8 @@ Install the attested `v0.13.0` release with its exact contracts baseline:
 CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.12.0/robotics_runtime_contracts-0.12.0-py3-none-any.whl
 HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.13.0/robotics_acceptance_harness-0.13.0-py3-none-any.whl
 uv tool install \
-  --with "${CONTRACTS}#sha256=71e156210b0f16571b9f734926b84f0516100e30bea46369ae798371990bb5b9" \
-  "${HARNESS}#sha256=e84ff38fab4ab1369a27bf804180dd0a1d01b57c7389db3ff5d670082388e9f1"
+  --with "${CONTRACTS}" \
+  "${HARNESS}"
 ```
 
 Release provenance verification is described in
