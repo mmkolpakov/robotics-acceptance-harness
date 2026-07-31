@@ -10,7 +10,7 @@ from uuid import uuid4
 from robotics_acceptance_harness import __version__
 from robotics_acceptance_harness.documents import BundleValidationError, load_document
 from robotics_acceptance_harness.evidence import load_evidence_index
-from robotics_acceptance_harness.result import write_contract_json
+from robotics_acceptance_harness.result import format_utc_datetime, write_contract_json
 from robotics_acceptance_harness.traces import (
     CausalHop,
     ChainViolation,
@@ -19,10 +19,6 @@ from robotics_acceptance_harness.traces import (
     load_otlp_json_traces,
     validate_trace_set,
 )
-
-
-def _iso8601(value: datetime) -> str:
-    return value.isoformat().replace("+00:00", "Z")
 
 
 def _domain_aggregate(statuses: set[str]) -> str:
@@ -100,7 +96,7 @@ def aggregate_results(
         "aggregate_id": aggregate_id or f"aggregate-{uuid4()}",
         "run_id": context.data["run_id"],
         "acceptance_run_sha256": context.sha256,
-        "generated_at": _iso8601(generated_at or datetime.now(UTC)),
+        "generated_at": format_utc_datetime(generated_at or datetime.now(UTC)),
         "per_domain_results": [
             {
                 "domain_id": result.data["domain_id"],
@@ -404,8 +400,8 @@ def _evaluate_trace(
             "run_id": effective_run_id,
             "channel_id": channel_id,
             "channel_contract_sha256": contract.sha256,
-            "started_at": _iso8601(started_at),
-            "finished_at": _iso8601(finished_at),
+            "started_at": format_utc_datetime(started_at),
+            "finished_at": format_utc_datetime(finished_at),
             "sent_count": observation.sent_count,
             "received_count": observation.received_count,
             "lost_count": observation.lost_count,
@@ -498,7 +494,7 @@ def _evaluate_trace(
     )
     verdict = {
         "status": transport_status,
-        "evaluated_at": _iso8601(evaluated_at),
+        "evaluated_at": format_utc_datetime(evaluated_at),
         "chain_count": len(chain_documents),
         "passed_chain_count": sum(item["status"] == "passed" for item in chain_documents),
         "failed_chain_count": sum(item["status"] == "failed" for item in chain_documents),
@@ -511,7 +507,7 @@ def _evaluate_trace(
             "schema_version": "transport-qualification-result.v1",
             "qualification_id": qualification_id or f"qualification-{uuid4()}",
             "run_id": effective_run_id,
-            "generated_at": _iso8601(evaluated_at),
+            "generated_at": format_utc_datetime(evaluated_at),
             **common,
             "verdict": verdict,
         }
@@ -523,7 +519,7 @@ def _evaluate_trace(
         "run_id": base.data["run_id"],
         "acceptance_run_sha256": base.data["acceptance_run_sha256"],
         "base_aggregate_sha256": base.sha256,
-        "generated_at": _iso8601(evaluated_at),
+        "generated_at": format_utc_datetime(evaluated_at),
         "per_domain_results": [dict(item) for item in base.data["per_domain_results"]],
         "per_domain_aggregate": domain_status,
         **common,

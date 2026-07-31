@@ -10,7 +10,7 @@ from robotics_acceptance_harness.documents import (
     LoadedDocument,
     load_document,
 )
-from robotics_acceptance_harness.result import write_contract_json
+from robotics_acceptance_harness.result import format_utc_datetime, write_contract_json
 
 
 def create_run_context(
@@ -34,7 +34,7 @@ def create_run_context(
     document = {
         "schema_version": "acceptance-run.v1",
         "run_id": resolved_run_id,
-        "created_at": created_at.isoformat().replace("+00:00", "Z"),
+        "created_at": format_utc_datetime(created_at),
         "scenario_id": scenario.data["scenario_id"],
         "scenario_sha256": scenario.sha256,
         "time_authority": {
