@@ -167,6 +167,9 @@ class RosGraphObserver:
                 tracker.future = tracker.client.call_async(tracker.request_type())
 
     def _action_observations(self) -> dict[str, EndpointObservation]:
+        observed_names = self._observed_names("actions")
+        if not observed_names:
+            return {}
         types: dict[str, set[str]] = {}
         servers: dict[str, int] = {}
         clients: dict[str, int] = {}
@@ -191,7 +194,7 @@ class RosGraphObserver:
                 servers=servers.get(name, 0),
                 clients=clients.get(name, 0),
             )
-            for name in self._observed_names("actions")
+            for name in observed_names
         }
 
     def _qos_compatible(self, topic: str) -> bool:
