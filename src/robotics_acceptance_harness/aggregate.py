@@ -253,11 +253,6 @@ def evaluate_transport_qualification(
         )
     expected_domains = tuple(sorted(trace_paths))
     expected_domain_set = set(expected_domains)
-    if set(trace_paths) != expected_domain_set:
-        raise BundleValidationError(
-            "$.trace_evidence",
-            "trace mapping must contain every run domain exactly once",
-        )
     if set(evidence_index_paths) != expected_domain_set:
         raise BundleValidationError(
             "$.trace_evidence",
@@ -475,7 +470,7 @@ def evaluate_transport_qualification(
         "causal_chains": chain_documents,
     }
     transport_status = worst_status(
-        {"passed", *observation_statuses, *chain_statuses},
+        {*observation_statuses, *chain_statuses},
         collapse_cancelled=True,
     )
     verdict = {
