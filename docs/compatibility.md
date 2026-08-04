@@ -7,7 +7,7 @@ release may change Python APIs, CLI behavior, and accepted contract versions;
 patch releases remain backward compatible. The documented CLI, exit codes,
 pytest fixtures, and emitted documents are public interfaces.
 
-The distribution requires `robotics-runtime-contracts>=0.12.0,<0.13`.
+The distribution requires `robotics-runtime-contracts>=0.13,<0.14`.
 Development uses the sibling checkout through `tool.uv.sources`; published
 wheel metadata contains only this version range. `uv build --no-sources` is the
 packaging gate.
