@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.support import write_extended_scenario
+
 FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
 
 
@@ -63,7 +65,7 @@ def test_bundle_exposes_runtime_manifest(pytester: pytest.Pytester) -> None:
     test_file = pytester.makepyfile(
         """
         def test_bundle(robotics_bundle):
-            assert robotics_bundle.runtime.schema_version == "runtime-manifest.v1"
+            assert robotics_bundle.runtime.schema_version == "runtime-manifest.v2"
             assert robotics_bundle.runtime.data["workload"]["kind"] == "none"
         """
     )
@@ -75,6 +77,23 @@ def test_bundle_exposes_runtime_manifest(pytester: pytest.Pytester) -> None:
         "--robotics-runtime",
         str(FIXTURES / "runtime.yaml"),
     )
+    result.assert_outcomes(passed=1)
+
+
+def test_plugin_loads_extension_schema_by_canonical_uri(pytester: pytest.Pytester) -> None:
+    test_file = make_test(pytester)
+    scenario, schema, uri = write_extended_scenario(pytester.path, FIXTURES / "scenario.yaml")
+    result = run_isolated(
+        pytester,
+        test_file.name,
+        "--robotics-scenario",
+        str(scenario),
+        "--robotics-runtime",
+        str(FIXTURES / "runtime.yaml"),
+        "--robotics-extension-schema",
+        f"{uri}={schema}",
+    )
+
     result.assert_outcomes(passed=1)
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from robotics_acceptance_harness.hardware_timing import (
@@ -19,6 +21,7 @@ POLICY = {
     "max_clock_offset_ms": 5,
     "max_clock_drift_ppm": 20,
     "max_message_age_ms": 50,
+    "time_authority_min_samples": 2,
 }
 ATTRIBUTES = {
     PROTOCOL_ATTRIBUTE: "ptp",
@@ -26,9 +29,15 @@ ATTRIBUTES = {
 }
 
 
-def samples(*, offset: float = 1, drift: float = 2, age: float = 3) -> list[MetricSample]:
+def samples(
+    *,
+    offset: float = 1,
+    drift: float = 2,
+    age: float = 3,
+    timestamps: tuple[int, int] = (1_000_000_000, 2_000_000_000),
+) -> list[MetricSample]:
     result: list[MetricSample] = []
-    for timestamp, adjustment in ((1_000_000_000, 0.0), (2_000_000_000, 0.5)):
+    for timestamp, adjustment in zip(timestamps, (0.0, 0.5), strict=True):
         result.extend(
             (
                 MetricSample(OFFSET_METRIC, offset + adjustment, "ms", timestamp, ATTRIBUTES),
@@ -58,6 +67,25 @@ def test_out_of_policy_measurement_is_a_failed_observation_not_bad_input() -> No
     observation = evaluate_hardware_timing(POLICY, samples(offset=10))
 
     assert not observation.within_policy
+
+
+def test_policy_requires_the_contract_minimum_sample_count() -> None:
+    observation = evaluate_hardware_timing(
+        {**POLICY, "time_authority_min_samples": 3},
+        samples(),
+    )
+
+    assert observation.sample_count == 2
+    assert not observation.within_policy
+
+
+def test_measurement_time_is_derived_from_integer_nanoseconds() -> None:
+    observation = evaluate_hardware_timing(
+        POLICY,
+        samples(timestamps=(1_700_000_000_000_000_000, 1_700_000_000_123_456_789)),
+    )
+
+    assert observation.measured_at == datetime(2023, 11, 14, 22, 13, 20, 123456, tzinfo=UTC)
 
 
 def test_rejects_missing_or_misaligned_measurements() -> None:

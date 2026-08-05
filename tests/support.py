@@ -9,6 +9,38 @@ from typing import Any
 
 import yaml
 
+EXTENSION_SCHEMA_URI = "https://schemas.example.org/sorting-item.v1.schema.json"
+
+
+def write_extended_scenario(
+    directory: Path,
+    base_scenario: Path,
+) -> tuple[Path, Path, str]:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": EXTENSION_SCHEMA_URI,
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["item_id"],
+        "properties": {"item_id": {"type": "string", "minLength": 1}},
+    }
+    raw_schema = json.dumps(schema, separators=(",", ":"), sort_keys=True).encode()
+    schema_path = directory / "sorting-extension.schema.json"
+    schema_path.write_bytes(raw_schema)
+
+    scenario = yaml.safe_load(base_scenario.read_text(encoding="utf-8"))
+    scenario["extension_schemas"] = [
+        {
+            "namespace": "org.example.sorting",
+            "schema_uri": EXTENSION_SCHEMA_URI,
+            "sha256": sha256(raw_schema).hexdigest(),
+        }
+    ]
+    scenario["extensions"] = {"org.example.sorting": {"item_id": "parcel-42"}}
+    scenario_path = directory / "scenario-with-extension.yaml"
+    scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+    return scenario_path, schema_path, EXTENSION_SCHEMA_URI
+
 
 class FakeTime:
     def __init__(self) -> None:

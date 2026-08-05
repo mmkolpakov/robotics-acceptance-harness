@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from statistics import pstdev
 from typing import Any
+
+from robotics_runtime_contracts import hardware_clock_within_policy
 
 from robotics_acceptance_harness.metrics import MetricSample
 
@@ -127,13 +129,21 @@ def evaluate_hardware_timing(
     drift_ppm = max(abs(value) for value in drifts)
     max_sample_age_ms = max(ages)
     jitter_ms = pstdev(offsets)
-    within_policy = (
-        monotonic
-        and offset_ms <= float(time_policy["max_clock_offset_ms"])
-        and drift_ppm <= float(time_policy["max_clock_drift_ppm"])
-        and max_sample_age_ms <= float(time_policy["max_message_age_ms"])
+    within_policy = hardware_clock_within_policy(
+        time_policy,
+        {
+            "sample_count": len(points),
+            "offset_ms": offset_ms,
+            "drift_ppm": drift_ppm,
+            "max_sample_age_ms": max_sample_age_ms,
+        },
+        monotonic=monotonic,
     )
-    measured_at = datetime.fromtimestamp(points[-1][0] / 1_000_000_000, tz=UTC)
+    seconds, nanoseconds = divmod(points[-1][0], 1_000_000_000)
+    measured_at = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(
+        seconds=seconds,
+        microseconds=nanoseconds // 1_000,
+    )
     return HardwareTimingObservation(
         sync_protocol=protocol,
         source=source,

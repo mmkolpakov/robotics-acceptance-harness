@@ -62,7 +62,7 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts>=0.13,<0.14` |
+| Contracts | `robotics-runtime-contracts>=0.14,<0.15` |
 | Scenarios | `acceptance-scenario.v4` |
 | Results | `acceptance-result.v4` |
 | Aggregates | `acceptance-aggregate.v4` |
@@ -77,11 +77,11 @@ this package alone does not qualify a target.
 
 ## Install
 
-Install the attested `v0.14.0` release with its exact contracts baseline:
+Install the attested `v0.15.0` release with its exact contracts baseline:
 
 ```bash
-CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.13.0/robotics_runtime_contracts-0.13.0-py3-none-any.whl
-HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.14.0/robotics_acceptance_harness-0.14.0-py3-none-any.whl
+CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.14.0/robotics_runtime_contracts-0.14.0-py3-none-any.whl
+HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.15.0/robotics_acceptance_harness-0.15.0-py3-none-any.whl
 uv tool install \
   --with "${CONTRACTS}" \
   "${HARNESS}"
@@ -195,7 +195,7 @@ channel contract.
 | Input | Required when | Contract |
 | --- | --- | --- |
 | Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v4` |
-| Runtime manifest | `explain`, `verify`, pytest | `runtime-manifest.v1` |
+| Runtime manifest | `explain`, `verify`, pytest | `runtime-manifest.v2` (`v1` remains readable) |
 | Model manifest | Inference workload | `model-artifact-manifest.v1` |
 | Dataset manifest | MCAP playback | `dataset-manifest.v1` |
 | Execution permit | HIL or real target | `execution-permit.v1` |
@@ -211,7 +211,7 @@ Local domain extensions remain explicit and digest-pinned:
 robotics-acceptance explain \
   --scenario scenario.yaml \
   --runtime runtime.json \
-  --extension-schema org.example.sorting=sorting-extension.schema.json
+  --extension-schema https://schemas.example.org/sorting.v1.schema.json=sorting-extension.schema.json
 ```
 
 Extensions cannot override common safety, timing, transport, or evidence rules.
@@ -251,6 +251,7 @@ Run-scoped simulation uses standard OTLP instruments:
 | `robotics.message.received` (`{message}`) | Delta monotonic sum | `run.id`, `domain.id`, `channel` |
 | `robotics.message.lost` (`{message}`) | Delta monotonic sum | `run.id`, `domain.id`, `channel` |
 | `robotics.message.sequence_error` (`{message}`) | Delta monotonic sum | `run.id`, `domain.id`, `channel` |
+| `robotics.simulation.deadline_miss_ratio` (`1`) | Gauge sampled in the measurement window | `run.id`, `domain.id` |
 
 The data-plane verdict requires one unambiguous measured channel. Loss is
 derived from the received and lost counters over the measurement window;
@@ -276,6 +277,10 @@ uv run pytest \
   --robotics-scenario scenario.yaml \
   --robotics-runtime runtime.json
 ```
+
+Supply scenario extensions with repeated
+`--robotics-extension-schema URI=PATH` arguments. The URI must equal the
+digest-pinned schema declaration and the schema's `$id`.
 
 Use `robotics_bundle` for the cross-checked bundle or `robotics_scenario` for
 the immutable scenario mapping. The plugin exposes no permit option and refuses

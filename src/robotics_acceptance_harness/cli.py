@@ -13,6 +13,7 @@ from robotics_acceptance_harness.aggregate import (
 )
 from robotics_acceptance_harness.application import explain_bundle, run_verification
 from robotics_acceptance_harness.documents import DocumentBundle, load_bundle
+from robotics_acceptance_harness.extension_schemas import load_extension_schemas
 from robotics_acceptance_harness.run_context import create_run_context
 
 
@@ -27,7 +28,7 @@ def _add_bundle_arguments(parser: argparse.ArgumentParser) -> None:
         "--extension-schema",
         action="append",
         default=[],
-        metavar="NAMESPACE=PATH",
+        metavar="URI=PATH",
         help="Digest-pinned local extension schema; may be repeated.",
     )
 
@@ -128,6 +129,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Optional transport-qualification-result.v1 for the same run.",
     )
+    aggregate.add_argument("--output", required=True, metavar="PATH")
 
     transport_evaluate = subparsers.add_parser(
         "transport-evaluate",
@@ -136,7 +138,6 @@ def _parser() -> argparse.ArgumentParser:
     transport_evaluate.add_argument("--run-id", required=True, metavar="RUN_ID")
     _add_trace_arguments(transport_evaluate)
 
-    aggregate.add_argument("--output", required=True, metavar="PATH")
     return parser
 
 
@@ -152,17 +153,6 @@ def _keyed_values(values: Sequence[str], option: str) -> Mapping[str, str]:
     return parsed
 
 
-def _extension_schemas(values: Sequence[str]) -> Mapping[str, bytes]:
-    schemas: dict[str, bytes] = {}
-    for namespace, path_value in _keyed_values(values, "--extension-schema").items():
-        path = Path(path_value).expanduser().resolve()
-        try:
-            schemas[namespace] = path.read_bytes()
-        except OSError as error:
-            raise ValueError(f"cannot read extension schema {path}: {error}") from error
-    return schemas
-
-
 def _bundle(arguments: argparse.Namespace) -> DocumentBundle:
     return load_bundle(
         arguments.scenario,
@@ -171,7 +161,7 @@ def _bundle(arguments: argparse.Namespace) -> DocumentBundle:
         dataset_path=arguments.dataset,
         permit_path=arguments.permit,
         verification_path=arguments.verification,
-        extension_schemas=_extension_schemas(arguments.extension_schema),
+        extension_schemas=load_extension_schemas(arguments.extension_schema),
     )
 
 

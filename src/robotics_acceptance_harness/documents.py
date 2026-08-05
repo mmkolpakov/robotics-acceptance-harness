@@ -281,7 +281,7 @@ def load_bundle(
         )
     runtime = load_document(
         runtime_path,
-        expected_schemas={"runtime-manifest.v1"},
+        expected_schemas={"runtime-manifest.v1", "runtime-manifest.v2"},
     )
     model = (
         load_document(model_path, expected_schemas={"model-artifact-manifest.v1"})

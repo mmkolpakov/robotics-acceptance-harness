@@ -212,21 +212,35 @@ def _write_metrics(
             "robotics.clock.sync_protocol": "mavlink_timesync",
             "robotics.clock.source": "mavlink_timesync_status",
         }
-        for name, unit, values in (
+        hardware_timestamps = tuple(
+            start_ns + ((end_ns - start_ns) * index // 29) for index in range(30)
+        )
+        for name, unit, value in (
             (
                 "robotics.hardware.clock.offset",
                 "ms",
-                (hardware_offset_ms, hardware_offset_ms + 0.1),
+                hardware_offset_ms,
             ),
-            ("robotics.hardware.clock.drift", "ppm", (2.0, 2.0)),
-            ("robotics.hardware.message.age", "ms", (5.0, 5.0)),
-            ("robotics.hardware.clock.monotonic", "1", (1.0, 1.0)),
+            ("robotics.hardware.clock.drift", "ppm", 2.0),
+            ("robotics.hardware.message.age", "ms", 5.0),
+            ("robotics.hardware.clock.monotonic", "1", 1.0),
         ):
             metrics.append(
                 _gauge(
                     name,
                     unit,
-                    ((start_ns, values[0]), (end_ns, values[1])),
+                    tuple(
+                        (
+                            timestamp,
+                            value
+                            + (
+                                0.1
+                                if name == "robotics.hardware.clock.offset" and index == 29
+                                else 0.0
+                            ),
+                        )
+                        for index, timestamp in enumerate(hardware_timestamps)
+                    ),
                     attributes=hardware_attributes,
                 )
             )
@@ -525,8 +539,23 @@ def test_verification_finalizes_measurement_before_reading_evidence(tmp_path: Pa
     )
 
     assert outputs.result["status"] == "passed"
+    assert outputs.result["shutdown"] == {
+        "observer_detached": True,
+        "recorders_closed": True,
+        "evidence_index_finalized": True,
+    }
     assert marker.is_file()
     assert observer.closed
+
+
+def test_verification_rejects_a_stale_measurement_marker_before_observation(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "measurement-complete"
+    marker.touch()
+
+    with pytest.raises(VerificationError, match="marker already exists"):
+        _simulation_case(tmp_path)
 
 
 def test_verification_requires_metrics_to_be_verified_evidence(tmp_path: Path) -> None:

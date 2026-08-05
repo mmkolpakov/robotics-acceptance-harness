@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "robotics-acceptance-harness"
-version = "0.14.0"
+version = "0.15.0"
 description = "Attach-only acceptance observer for validated robotics executions."
 requires-python = ">=3.12,<3.14"
 readme = "README.md"
@@ -24,7 +24,7 @@ dependencies = [
   "junitparser>=5.0.1,<6",
   "opentelemetry-proto==1.43.0",
   "pyyaml>=6.0.3,<7",
-  "robotics-runtime-contracts>=0.13,<0.14",
+  "robotics-runtime-contracts>=0.14,<0.15",
 ]
 
 [tool.uv.sources]
@@ -44,7 +44,7 @@ Issues = "https://github.com/mmkolpakov/robotics-acceptance-harness/issues"
 [dependency-groups]
 dev = [
   "coverage[toml]==7.15.0",
-  "mypy==2.2.0",
+  "mypy==2.3.0",
   "pre-commit==4.6.0",
   "pytest==9.1.1",
   "ruff==0.15.21",
