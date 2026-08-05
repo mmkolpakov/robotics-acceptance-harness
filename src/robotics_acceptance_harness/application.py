@@ -218,6 +218,15 @@ def run_verification(
     scenario = bundle.scenario_data
     execution = scenario["execution"]
     physical = execution["target_environment"] in {"hil", "real_robot"}
+    measurement_complete = Path(measurement_complete_path).expanduser().resolve()
+    if measurement_complete.exists():
+        raise VerificationError(
+            f"measurement completion marker already exists: {measurement_complete}"
+        )
+    if not measurement_complete.parent.is_dir():
+        raise VerificationError(
+            f"measurement completion directory does not exist: {measurement_complete.parent}"
+        )
     run_context = load_run_context(
         run_context_path,
         run_id=run_id,
@@ -275,10 +284,12 @@ def run_verification(
     finally:
         observer.close()
 
-    Path(measurement_complete_path).expanduser().resolve().touch(
-        mode=0o444,
-        exist_ok=False,
-    )
+    try:
+        measurement_complete.touch(mode=0o444, exist_ok=False)
+    except FileExistsError as error:
+        raise VerificationError(
+            f"measurement completion marker appeared during the run: {measurement_complete}"
+        ) from error
 
     assert last_snapshot is not None
     evidence = _wait_for_evidence(
@@ -370,10 +381,11 @@ def run_verification(
         assertions.append(timing_failure)
     forbidden_observation: ForbiddenGraphObservation = forbidden_monitor.result()
     finished_at = utc_now()
+    evidence_finalized = evidence.index.data.get("finalized") is True
     shutdown = {
         "observer_detached": True,
-        "recorders_closed": True,
-        "evidence_index_finalized": True,
+        "recorders_closed": measurement_complete.is_file() and evidence_finalized,
+        "evidence_index_finalized": evidence_finalized,
     }
     monotonic_duration_sec = (
         measurement_finished_monotonic_ns - measurement_started_monotonic_ns

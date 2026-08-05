@@ -12,6 +12,7 @@ from google.protobuf.json_format import ParseDict
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
+from robotics_runtime_contracts import channel_observation_status
 
 from robotics_acceptance_harness.otel import otlp_attributes, read_otlp_json_lines
 
@@ -747,25 +748,7 @@ def evaluate_channel_delivery(
         for exceeded, code, message in limits
         if exceeded
     )
-    status: Literal["passed", "failed", "incomplete", "error"]
-    if any(
-        item.code
-        in {
-            "ambiguous_message_id",
-            "invalid_observation",
-            "observation_window_exceeded",
-        }
-        for item in violations
-    ):
-        status = "error"
-    elif violations:
-        status = (
-            "failed"
-            if any(item.code != "insufficient_messages" for item in violations)
-            else "incomplete"
-        )
-    else:
-        status = "passed"
+    status = channel_observation_status(item.code for item in violations)
     return ChannelObservationEvaluation(
         status=status,
         started_at_ns=window_start_ns,

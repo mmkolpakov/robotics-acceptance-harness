@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from robotics_acceptance_harness.cli import main
+from tests.support import write_extended_scenario
 
 FIXTURES = Path(__file__).parent / "fixtures" / "simulation"
 
@@ -77,6 +78,28 @@ def test_explain_rejects_invalid_extension_argument(capsys) -> None:
 
     assert exit_code == 2
     assert "invalid --extension-schema" in capsys.readouterr().err
+
+
+def test_explain_loads_extension_schema_by_canonical_uri(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scenario, schema, uri = write_extended_scenario(tmp_path, FIXTURES / "scenario.yaml")
+
+    exit_code = main(
+        [
+            "explain",
+            "--scenario",
+            str(scenario),
+            "--runtime",
+            str(FIXTURES / "runtime.yaml"),
+            "--extension-schema",
+            f"{uri}={schema}",
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["policy"] == "accepted-simulation"
 
 
 def test_verify_requires_run_id(capsys) -> None:

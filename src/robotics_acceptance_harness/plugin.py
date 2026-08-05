@@ -12,6 +12,7 @@ from robotics_acceptance_harness.documents import (
     DocumentBundle,
     load_bundle,
 )
+from robotics_acceptance_harness.extension_schemas import load_extension_schemas
 
 _BUNDLE_KEY = pytest.StashKey[DocumentBundle]()
 
@@ -59,6 +60,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         help="Path to the dataset-manifest declared by a playback scenario.",
     )
+    group.addoption(
+        "--robotics-extension-schema",
+        dest="robotics_extension_schemas",
+        action="append",
+        default=[],
+        metavar="URI=PATH",
+        help="Digest-pinned local extension schema; may be repeated.",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -70,11 +79,19 @@ def pytest_configure(config: pytest.Config) -> None:
 
     path = Path(scenario_path).expanduser().resolve()
     try:
+        extension_schemas = load_extension_schemas(
+            config.getoption("robotics_extension_schemas"),
+            option="--robotics-extension-schema",
+        )
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from error
+    try:
         bundle = load_bundle(
             path,
             runtime_path=config.getoption("robotics_runtime_path"),
             model_path=config.getoption("robotics_model_path"),
             dataset_path=config.getoption("robotics_dataset_path"),
+            extension_schemas=extension_schemas,
         )
     except BundleValidationError as error:
         if error.validation_message.startswith("cannot parse"):
