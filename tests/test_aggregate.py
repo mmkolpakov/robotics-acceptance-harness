@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from robotics_runtime_contracts import validate_document
 
 from robotics_acceptance_harness.aggregate import (
     aggregate_results,
@@ -149,10 +150,20 @@ def trace_file(
     span_name: str,
     span_byte: int,
     *,
-    message_id: str = "message-1",
+    message_id: str | None = "message-1",
     parent_byte: int | None = None,
     link_byte: int | None = None,
 ) -> Path:
+    attributes = (
+        [
+            {
+                "key": "messaging.message.id",
+                "value": {"stringValue": message_id},
+            }
+        ]
+        if message_id is not None
+        else []
+    )
     span: dict[str, object] = {
         "traceId": TRACE_ID,
         "spanId": f"{span_byte:02x}" * 8,
@@ -168,12 +179,7 @@ def trace_file(
             if parent_byte is not None or link_byte is not None
             else "1785067200000002000"
         ),
-        "attributes": [
-            {
-                "key": "messaging.message.id",
-                "value": {"stringValue": message_id},
-            }
-        ],
+        "attributes": attributes,
     }
     if parent_byte is not None:
         span["parentSpanId"] = f"{parent_byte:02x}" * 8
@@ -182,12 +188,7 @@ def trace_file(
             {
                 "traceId": TRACE_ID,
                 "spanId": f"{link_byte:02x}" * 8,
-                "attributes": [
-                    {
-                        "key": "messaging.message.id",
-                        "value": {"stringValue": message_id},
-                    }
-                ],
+                "attributes": attributes,
             }
         ]
     return write_json(
@@ -323,19 +324,23 @@ def transport_qualification(
     consumer_parent: int | None = None,
     consumer_link: int | None = None,
     consumer_span_byte: int = 3,
-    consumer_message_id: str = "message-1",
+    producer_message_id: str | None = "message-1",
+    consumer_message_id: str | None = "message-1",
+    producer_span_name: str = "observation publish",
+    consumer_span_name: str = "observation receive",
     chain_count: int = 1,
 ) -> dict[str, object]:
     producer = trace_file(
         tmp_path,
         "camera-domain",
-        "observation publish",
+        producer_span_name,
         2,
+        message_id=producer_message_id,
     )
     consumer = trace_file(
         tmp_path,
         "control-domain",
-        "observation receive",
+        consumer_span_name,
         consumer_span_byte,
         message_id=consumer_message_id,
         parent_byte=consumer_parent,
@@ -577,6 +582,42 @@ def test_transport_qualification_fails_measured_delivery_loss(tmp_path: Path) ->
 
     assert result["verdict"]["status"] == "failed"
     assert result["channel_observations"][0]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("expected_status", "options"),
+    [
+        (
+            "incomplete",
+            {
+                "producer_span_name": "unrelated producer",
+                "consumer_span_name": "unrelated consumer",
+            },
+        ),
+        (
+            "error",
+            {
+                "producer_message_id": None,
+                "consumer_message_id": None,
+                "consumer_link": 2,
+            },
+        ),
+    ],
+)
+def test_transport_qualification_emits_contract_valid_nonpassing_status(
+    tmp_path: Path,
+    expected_status: str,
+    options: dict[str, Any],
+) -> None:
+    result = transport_qualification(tmp_path, relationship="link", **options)
+    observation = json.loads(
+        (tmp_path / "transport-observations" / "sensor.control.json").read_text(encoding="utf-8")
+    )
+
+    validate_document(observation)
+    validate_document(result)
+    assert observation["status"] == expected_status
+    assert result["verdict"]["status"] == expected_status
 
 
 def test_transport_qualification_proves_parent_chain(tmp_path: Path) -> None:
