@@ -125,3 +125,14 @@ def test_run_identity_mismatch_is_rejected(tmp_path: Path) -> None:
             _write_index(tmp_path, _index(segment)),
             expected_run_id="org.example.other-run",
         )
+
+
+def test_scenario_v5_rejects_an_older_evidence_index(tmp_path: Path) -> None:
+    segment = tmp_path / "run.json"
+    segment.write_bytes(b"verified evidence")
+
+    with pytest.raises(EvidenceValidationError, match="requires evidence-index.v3"):
+        load_evidence_index(
+            _write_index(tmp_path, _index(segment)),
+            scenario_schema="acceptance-scenario.v5",
+        )

@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from robotics_runtime_contracts import (
+    ClockEvidenceValidationError,
+    SchemaCompatibilityError,
+    validate_clock_relation_evidence,
+    validate_companion_schema,
+)
+
 from robotics_acceptance_harness import __version__
 from robotics_acceptance_harness.documents import BundleValidationError, load_document
 from robotics_acceptance_harness.evidence import load_evidence_index
@@ -25,17 +32,29 @@ from robotics_acceptance_harness.traces import (
 
 def aggregate_results(
     *,
+    scenario_path: str | Path,
     run_context_path: str | Path,
     result_paths: Sequence[str | Path],
     output_path: str | Path,
     transport_qualification_path: str | Path | None = None,
     aggregate_id: str | None = None,
     generated_at: datetime | None = None,
+    extension_schemas: Mapping[str, bytes | str] | None = None,
 ) -> Path:
     """Validate and aggregate the complete per-domain result registry for one run."""
 
+    scenario = load_document(
+        scenario_path,
+        expected_schemas={"acceptance-scenario.v4", "acceptance-scenario.v5"},
+        extension_schemas=extension_schemas,
+    )
     context_path = Path(run_context_path).expanduser().resolve()
     context = load_document(context_path, expected_schemas={"acceptance-run.v1"})
+    if (
+        context.data["scenario_id"] != scenario.data["scenario_id"]
+        or context.data["scenario_sha256"] != scenario.sha256
+    ):
+        raise BundleValidationError("$.scenario_sha256", "run context identifies another scenario")
     if not result_paths:
         raise BundleValidationError("$.per_domain_results", "at least one result is required")
 
@@ -43,7 +62,7 @@ def aggregate_results(
     results = [
         load_document(
             path,
-            expected_schemas={"acceptance-result.v4"},
+            expected_schemas={"acceptance-result.v4", "acceptance-result.v5"},
         )
         for path in resolved_result_paths
     ]
@@ -55,11 +74,29 @@ def aggregate_results(
     qualification = (
         load_document(
             qualification_path,
-            expected_schemas={"transport-qualification-result.v1"},
+            expected_schemas={
+                "transport-qualification-result.v1",
+                "transport-qualification-result.v2",
+            },
         )
         if qualification_path is not None
         else None
     )
+    try:
+        for result in results:
+            validate_companion_schema(
+                scenario.schema_version,
+                "domain_result",
+                result.schema_version,
+            )
+        if qualification is not None:
+            validate_companion_schema(
+                scenario.schema_version,
+                "transport_qualification",
+                qualification.schema_version,
+            )
+    except SchemaCompatibilityError as error:
+        raise BundleValidationError("$.schema_version", str(error)) from error
     expected_domains = {item["domain_id"] for item in context.data["domains"]}
     observed_domains = {item.data["domain_id"] for item in results}
     if observed_domains != expected_domains:
@@ -103,6 +140,14 @@ def aggregate_results(
             raise BundleValidationError(
                 "$.transport_qualification.run_id",
                 "transport qualification belongs to another run",
+            )
+        if (
+            qualification.schema_version == "transport-qualification-result.v2"
+            and qualification.data["scenario_sha256"] != scenario.sha256
+        ):
+            raise BundleValidationError(
+                "$.transport_qualification.scenario_sha256",
+                "transport qualification belongs to another scenario",
             )
         qualification_domains = {item["domain_id"] for item in qualification.data["trace_evidence"]}
         if qualification_domains != expected_domains:
@@ -226,18 +271,32 @@ def _hop_document(hop: CausalHop) -> dict[str, Any]:
 def evaluate_transport_qualification(
     *,
     run_id: str,
+    scenario_path: str | Path,
     causal_chain_paths: Sequence[str | Path],
     channel_contract_paths: Sequence[str | Path],
     trace_paths: Mapping[str, str | Path],
     evidence_index_paths: Mapping[str, str | Path],
+    clock_relation_paths: Sequence[str | Path] = (),
     observation_output_dir: str | Path,
     output_path: str | Path,
     qualification_id: str | None = None,
     generated_at: datetime | None = None,
+    extension_schemas: Mapping[str, bytes | str] | None = None,
 ) -> Path:
     """Evaluate transport evidence without inventing a domain execution."""
 
     evaluated_at = generated_at or datetime.now(UTC)
+    scenario = load_document(
+        scenario_path,
+        expected_schemas={"acceptance-scenario.v5"},
+        extension_schemas=extension_schemas,
+    )
+    clock_policy = scenario.data["time_policy"].get("cross_domain_clock")
+    if clock_policy is None:
+        raise BundleValidationError(
+            "$.time_policy.cross_domain_clock",
+            "cross-domain transport requires an explicit clock policy",
+        )
     if not causal_chain_paths:
         raise BundleValidationError(
             "$.causal_chain_contracts",
@@ -327,11 +386,14 @@ def evaluate_transport_qualification(
 
     trace_evidence: list[dict[str, Any]] = []
     spans_by_domain = {}
+    verified_by_domain = {}
     for domain_id in sorted(expected_domains):
         verified = load_evidence_index(
             evidence_index_paths[domain_id],
             expected_run_id=run_id,
+            scenario_schema=scenario.schema_version,
         )
+        verified_by_domain[domain_id] = verified
         trace_path = Path(trace_paths[domain_id]).expanduser().resolve()
         link = verified.local_files.get(trace_path)
         if link is None or link["media_type"] != "application/x-ndjson":
@@ -353,6 +415,72 @@ def evaluate_transport_qualification(
             expected_sha256=str(link["sha256"]),
         )
     validate_trace_set(spans_by_domain)
+
+    clock_relations = [
+        load_document(path, expected_schemas={"clock-relation.v1"}) for path in clock_relation_paths
+    ]
+    clock_relation_references: list[dict[str, Any]] = []
+    clock_statuses: set[str] = set()
+    required_clock_pairs = {
+        (
+            str(contract.data["source"]["domain_id"]),
+            str(contract.data["destination"]["domain_id"]),
+        )
+        for contract in channel_contracts
+    }
+    observed_clock_pairs: set[tuple[str, str]] = set()
+    evidence_sha256_by_domain = {
+        domain_id: frozenset(str(link["sha256"]) for link in verified.links)
+        for domain_id, verified in verified_by_domain.items()
+    }
+    for relation in clock_relations:
+        if relation.data["run_id"] != run_id:
+            raise BundleValidationError(
+                "$.clock_relations",
+                "clock relation belongs to another run",
+            )
+        if relation.data["scenario_sha256"] != scenario.sha256:
+            raise BundleValidationError(
+                "$.clock_relations",
+                "clock relation belongs to another scenario",
+            )
+        if dict(relation.data["policy"]) != dict(clock_policy):
+            raise BundleValidationError(
+                "$.clock_relations",
+                "clock relation policy differs from the scenario",
+            )
+        pair = (
+            str(relation.data["source_domain_id"]),
+            str(relation.data["destination_domain_id"]),
+        )
+        if pair not in required_clock_pairs or pair in observed_clock_pairs:
+            raise BundleValidationError(
+                "$.clock_relations",
+                "clock relation domain pairs must uniquely match channel directions",
+            )
+        observed_clock_pairs.add(pair)
+        try:
+            validate_clock_relation_evidence(
+                relation.data,
+                evidence_sha256_by_domain,
+            )
+        except ClockEvidenceValidationError as error:
+            raise BundleValidationError(
+                "$.clock_relations",
+                str(error),
+            ) from error
+        clock_relation_references.append(
+            {
+                "relation_id": relation.data["relation_id"],
+                "source_domain_id": relation.data["source_domain_id"],
+                "destination_domain_id": relation.data["destination_domain_id"],
+                "sha256": relation.sha256,
+                "status": relation.data["status"],
+            }
+        )
+        clock_statuses.add(str(relation.data["status"]))
+    if observed_clock_pairs != required_clock_pairs:
+        clock_statuses.add("incomplete")
 
     observation_dir = Path(observation_output_dir).expanduser().resolve()
     observation_dir.mkdir(parents=True, exist_ok=True)
@@ -465,7 +593,7 @@ def evaluate_transport_qualification(
         "causal_chains": chain_documents,
     }
     transport_status = worst_status(
-        {*observation_statuses, *chain_statuses},
+        {*observation_statuses, *chain_statuses, *clock_statuses},
         collapse_cancelled=True,
     )
     verdict = {
@@ -479,11 +607,19 @@ def evaluate_transport_qualification(
     }
 
     result: dict[str, Any] = {
-        "schema_version": "transport-qualification-result.v1",
+        "schema_version": "transport-qualification-result.v2",
         "qualification_id": qualification_id or f"qualification-{uuid4()}",
         "run_id": run_id,
+        "scenario_sha256": scenario.sha256,
         "generated_at": format_utc_datetime(evaluated_at),
         **common,
+        "clock_relations": sorted(
+            clock_relation_references,
+            key=lambda item: (
+                item["source_domain_id"],
+                item["destination_domain_id"],
+            ),
+        ),
         "verdict": verdict,
     }
     return write_contract_json(result, output_path)

@@ -57,13 +57,13 @@ def ready_snapshot() -> GraphSnapshot:
         services={
             "/camera/get_parameters": EndpointObservation(
                 types=("rcl_interfaces/srv/GetParameters",),
-                servers=1,
+                server_nodes=1,
             )
         },
         actions={
             "/takeoff": EndpointObservation(
                 types=("example_interfaces/action/Fibonacci",),
-                servers=1,
+                server_nodes=1,
             )
         },
     )

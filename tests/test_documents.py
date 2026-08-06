@@ -36,3 +36,14 @@ def test_load_bundle_rejects_runtime_mode_mismatch(tmp_path: Path) -> None:
 def test_load_bundle_requires_runtime() -> None:
     with pytest.raises(BundleValidationError, match="requires a runtime manifest"):
         load_bundle(FIXTURES / "scenario.yaml")
+
+
+def test_scenario_v5_rejects_an_older_runtime_manifest(tmp_path: Path) -> None:
+    scenario = yaml.safe_load((FIXTURES / "scenario.yaml").read_text(encoding="utf-8"))
+    scenario["schema_version"] = "acceptance-scenario.v5"
+    scenario["metric_definitions"] = []
+    scenario_path = tmp_path / "scenario.yaml"
+    scenario_path.write_text(yaml.safe_dump(scenario), encoding="utf-8")
+
+    with pytest.raises(BundleValidationError, match="requires runtime-manifest.v3"):
+        load_bundle(scenario_path, runtime_path=FIXTURES / "runtime.yaml")

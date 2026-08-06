@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from robotics_runtime_contracts import validate_document
 
 from robotics_acceptance_harness.aggregate import (
@@ -36,6 +37,48 @@ TYPE_HASH = f"RIHS01_{'1' * 64}"
 def write_json(path: Path, value: object) -> Path:
     path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def transport_scenario(tmp_path: Path) -> Path:
+    scenario = yaml.safe_load((FIXTURES / "scenario.yaml").read_text(encoding="utf-8"))
+    scenario["schema_version"] = "acceptance-scenario.v5"
+    scenario["metric_definitions"] = []
+    scenario["time_policy"]["cross_domain_clock"] = {
+        "method": "measured_skew",
+        "minimum_samples": 30,
+        "maximum_absolute_skew_ms": 1,
+    }
+    path = tmp_path / "transport-scenario.yaml"
+    path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def clock_relation(tmp_path: Path, scenario_path: Path, evidence_path: Path) -> Path:
+    return write_json(
+        tmp_path / "clock-relation.json",
+        {
+            "schema_version": "clock-relation.v1",
+            "relation_id": "camera-to-control-clock",
+            "run_id": RUN_ID,
+            "scenario_sha256": hashlib.sha256(scenario_path.read_bytes()).hexdigest(),
+            "source_domain_id": "camera-domain",
+            "destination_domain_id": "control-domain",
+            "method": "measured_skew",
+            "sync_protocol": "sim_clock",
+            "started_at": "2026-07-26T12:00:00Z",
+            "finished_at": "2026-07-26T12:00:01Z",
+            "sample_count": 30,
+            "max_absolute_skew_ms": 0.1,
+            "policy": {
+                "method": "measured_skew",
+                "minimum_samples": 30,
+                "maximum_absolute_skew_ms": 1,
+            },
+            "status": "passed",
+            "violations": [],
+            "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+        },
+    )
 
 
 def result(
@@ -133,6 +176,7 @@ def run_context(
 
 def base_aggregate(tmp_path: Path, context_path: Path) -> Path:
     return aggregate_results(
+        scenario_path=FIXTURES / "scenario.yaml",
         run_context_path=context_path,
         result_paths=[
             result(tmp_path, "camera-domain", "0"),
@@ -220,17 +264,32 @@ def trace_file(
     )
 
 
-def trace_evidence_index(tmp_path: Path, domain_id: str, trace_path: Path) -> Path:
+def trace_evidence_index(
+    tmp_path: Path,
+    domain_id: str,
+    trace_path: Path,
+    *,
+    extra_paths: tuple[Path, ...] = (),
+) -> Path:
     return write_evidence_index(
         tmp_path / f"{domain_id}.evidence.json",
         run_id=RUN_ID,
         recording_mode="bounded",
+        schema_version="evidence-index.v3",
         segments=[
             local_evidence_segment(
                 trace_path,
                 media_type="application/x-ndjson",
                 segment_index=900000,
-            )
+            ),
+            *(
+                local_evidence_segment(
+                    path,
+                    media_type="application/json",
+                    segment_index=900001 + index,
+                )
+                for index, path in enumerate(extra_paths)
+            ),
         ],
     )
 
@@ -330,6 +389,7 @@ def transport_qualification(
     consumer_span_name: str = "observation receive",
     chain_count: int = 1,
 ) -> dict[str, object]:
+    scenario_path = transport_scenario(tmp_path)
     producer = trace_file(
         tmp_path,
         "camera-domain",
@@ -359,6 +419,7 @@ def transport_qualification(
         )
     output = evaluate_transport_qualification(
         run_id=RUN_ID,
+        scenario_path=scenario_path,
         causal_chain_paths=chain_paths,
         channel_contract_paths=[channel_path],
         trace_paths={
@@ -369,12 +430,42 @@ def transport_qualification(
             "camera-domain": trace_evidence_index(tmp_path, "camera-domain", producer),
             "control-domain": trace_evidence_index(tmp_path, "control-domain", consumer),
         },
+        clock_relation_paths=(clock_relation(tmp_path, scenario_path, producer),),
         observation_output_dir=tmp_path / "transport-observations",
         output_path=tmp_path / "transport-qualification.json",
         qualification_id="qualification-01234567-89ab-4def-8123-456789abcdef",
         generated_at=datetime(2026, 7, 26, 12, 3, tzinfo=UTC),
     )
     return json.loads(output.read_text(encoding="utf-8"))
+
+
+def transport_aggregate_inputs(
+    tmp_path: Path,
+    scenario_path: Path,
+) -> tuple[Path, list[Path]]:
+    scenario = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
+    scenario_sha256 = hashlib.sha256(scenario_path.read_bytes()).hexdigest()
+    context_path = write_json(
+        tmp_path / "acceptance-run-v5.json",
+        acceptance_run(
+            run_id=RUN_ID,
+            scenario_id=scenario["scenario_id"],
+            scenario_sha256=scenario_sha256,
+            time_kind="sim_clock",
+            source_id="simulation-clock",
+            domains=[
+                {"domain_id": "camera-domain", "role": "sensor"},
+                {"domain_id": "control-domain", "role": "controller"},
+            ],
+        ),
+    )
+    results = [result(tmp_path, "camera-domain", "0"), result(tmp_path, "control-domain", "1")]
+    for result_path in results:
+        result_document = json.loads(result_path.read_text(encoding="utf-8"))
+        result_document["scenario_id"] = scenario["scenario_id"]
+        result_document["scenario_sha256"] = scenario_sha256
+        write_json(result_path, result_document)
+    return context_path, results
 
 
 def test_aggregate_requires_and_emits_every_registered_domain(tmp_path: Path) -> None:
@@ -391,16 +482,15 @@ def test_aggregate_requires_and_emits_every_registered_domain(tmp_path: Path) ->
 
 
 def test_aggregate_references_transport_qualification(tmp_path: Path) -> None:
-    context_path = run_context(tmp_path)
     transport_qualification(tmp_path, relationship="link", consumer_link=2)
+    scenario_path = tmp_path / "transport-scenario.yaml"
+    context_path, results = transport_aggregate_inputs(tmp_path, scenario_path)
     qualification_path = tmp_path / "transport-qualification.json"
 
     output = aggregate_results(
+        scenario_path=scenario_path,
         run_context_path=context_path,
-        result_paths=[
-            result(tmp_path, "camera-domain", "0"),
-            result(tmp_path, "control-domain", "1"),
-        ],
+        result_paths=results,
         transport_qualification_path=qualification_path,
         output_path=tmp_path / "aggregate.json",
     )
@@ -413,16 +503,96 @@ def test_aggregate_references_transport_qualification(tmp_path: Path) -> None:
     assert reference["result_sha256"] == hashlib.sha256(qualification_path.read_bytes()).hexdigest()
 
 
+def test_shared_clock_observations_must_match_endpoint_domains(tmp_path: Path) -> None:
+    scenario_path = transport_scenario(tmp_path)
+    scenario = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
+    scenario["time_policy"]["cross_domain_clock"] = {"method": "shared_clock_identity"}
+    scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+    producer = trace_file(tmp_path, "camera-domain", "observation publish", 2)
+    consumer = trace_file(
+        tmp_path,
+        "control-domain",
+        "observation receive",
+        3,
+        link_byte=2,
+    )
+    source_clock = write_json(tmp_path / "source-clock.json", {"domain": "camera-domain"})
+    destination_clock = write_json(
+        tmp_path / "destination-clock.json",
+        {"domain": "control-domain"},
+    )
+    identity = {
+        "authority": "shared-linux-kernel-clock-realtime",
+        "boot_id": "01234567-89ab-4def-8123-456789abcdef",
+        "implementation": "clock_gettime(CLOCK_REALTIME)",
+        "resolution_sec": 1e-9,
+        "source_observation_sha256": hashlib.sha256(destination_clock.read_bytes()).hexdigest(),
+        "destination_observation_sha256": hashlib.sha256(source_clock.read_bytes()).hexdigest(),
+    }
+    identity_path = write_json(tmp_path / "shared-clock.json", identity)
+    relation_path = write_json(
+        tmp_path / "clock-relation.json",
+        {
+            "schema_version": "clock-relation.v1",
+            "relation_id": "camera-to-control-clock",
+            "run_id": RUN_ID,
+            "scenario_sha256": hashlib.sha256(scenario_path.read_bytes()).hexdigest(),
+            "source_domain_id": "camera-domain",
+            "destination_domain_id": "control-domain",
+            "method": "shared_clock_identity",
+            "sync_protocol": "shared_kernel_clock",
+            "started_at": "2026-07-26T12:00:00Z",
+            "finished_at": "2026-07-26T12:00:01Z",
+            "policy": {"method": "shared_clock_identity"},
+            "shared_clock_identity": identity,
+            "status": "passed",
+            "violations": [],
+            "evidence_sha256": hashlib.sha256(identity_path.read_bytes()).hexdigest(),
+        },
+    )
+    channel_path = channel_contract(tmp_path)
+
+    with pytest.raises(BundleValidationError, match="source_observation.*camera-domain"):
+        evaluate_transport_qualification(
+            run_id=RUN_ID,
+            scenario_path=scenario_path,
+            causal_chain_paths=[causal_chain(tmp_path, channel_path)],
+            channel_contract_paths=[channel_path],
+            trace_paths={"camera-domain": producer, "control-domain": consumer},
+            evidence_index_paths={
+                "camera-domain": trace_evidence_index(
+                    tmp_path,
+                    "camera-domain",
+                    producer,
+                    extra_paths=(source_clock, identity_path),
+                ),
+                "control-domain": trace_evidence_index(
+                    tmp_path,
+                    "control-domain",
+                    consumer,
+                    extra_paths=(destination_clock,),
+                ),
+            },
+            clock_relation_paths=[relation_path],
+            observation_output_dir=tmp_path / "transport-observations",
+            output_path=tmp_path / "transport-qualification.json",
+        )
+
+
 def test_aggregate_rejects_transport_for_another_run(tmp_path: Path) -> None:
     context_path = run_context(tmp_path)
     transport_qualification(tmp_path, relationship="link", consumer_link=2)
     qualification_path = tmp_path / "transport-qualification.json"
     qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+    qualification["schema_version"] = "transport-qualification-result.v1"
+    qualification.pop("scenario_sha256")
+    qualification.pop("clock_relations")
     qualification["run_id"] = "run-01234567-89ab-4def-8123-456789abcdea"
     write_json(qualification_path, qualification)
 
     with pytest.raises(BundleValidationError, match="another run"):
         aggregate_results(
+            scenario_path=FIXTURES / "scenario.yaml",
             run_context_path=context_path,
             result_paths=[
                 result(tmp_path, "camera-domain", "0"),
@@ -433,17 +603,58 @@ def test_aggregate_rejects_transport_for_another_run(tmp_path: Path) -> None:
         )
 
 
-def test_aggregate_rejects_transport_with_another_domain_set(tmp_path: Path) -> None:
-    context_path = run_context(
-        tmp_path,
-        domains=[{"domain_id": "camera-domain", "role": "sensor"}],
-    )
+def test_aggregate_rejects_transport_v1_for_scenario_v5(tmp_path: Path) -> None:
+    scenario_path = transport_scenario(tmp_path)
+    context_path, results = transport_aggregate_inputs(tmp_path, scenario_path)
     transport_qualification(tmp_path, relationship="link", consumer_link=2)
+    qualification_path = tmp_path / "transport-qualification.json"
+    qualification = json.loads(qualification_path.read_text(encoding="utf-8"))
+    qualification["schema_version"] = "transport-qualification-result.v1"
+    qualification.pop("clock_relations")
+    qualification.pop("scenario_sha256")
+    write_json(qualification_path, qualification)
+
+    with pytest.raises(BundleValidationError, match="requires transport-qualification-result.v2"):
+        aggregate_results(
+            scenario_path=scenario_path,
+            run_context_path=context_path,
+            result_paths=results,
+            transport_qualification_path=qualification_path,
+            output_path=tmp_path / "aggregate-v5.json",
+        )
+
+
+def test_aggregate_rejects_transport_for_another_scenario(tmp_path: Path) -> None:
+    transport_qualification(tmp_path, relationship="link", consumer_link=2)
+    scenario_path = tmp_path / "transport-scenario.yaml"
+    scenario = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
+    scenario["scenario_id"] = "org.example.other-physics-smoke"
+    scenario_path.write_text(yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8")
+    context_path, results = transport_aggregate_inputs(tmp_path, scenario_path)
+
+    with pytest.raises(BundleValidationError, match="another scenario"):
+        aggregate_results(
+            scenario_path=scenario_path,
+            run_context_path=context_path,
+            result_paths=results,
+            transport_qualification_path=tmp_path / "transport-qualification.json",
+            output_path=tmp_path / "aggregate-v5.json",
+        )
+
+
+def test_aggregate_rejects_transport_with_another_domain_set(tmp_path: Path) -> None:
+    transport_qualification(tmp_path, relationship="link", consumer_link=2)
+    scenario_path = tmp_path / "transport-scenario.yaml"
+    context_path, results = transport_aggregate_inputs(tmp_path, scenario_path)
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    context["domains"] = [{"domain_id": "camera-domain", "role": "sensor"}]
+    write_json(context_path, context)
 
     with pytest.raises(BundleValidationError, match="every run domain"):
         aggregate_results(
+            scenario_path=scenario_path,
             run_context_path=context_path,
-            result_paths=[result(tmp_path, "camera-domain", "0")],
+            result_paths=[results[0]],
             transport_qualification_path=tmp_path / "transport-qualification.json",
             output_path=tmp_path / "aggregate.json",
         )
@@ -452,6 +663,7 @@ def test_aggregate_rejects_transport_with_another_domain_set(tmp_path: Path) -> 
 def test_aggregate_fails_when_registered_domain_has_no_result(tmp_path: Path) -> None:
     with pytest.raises(BundleValidationError, match="control-domain"):
         aggregate_results(
+            scenario_path=FIXTURES / "scenario.yaml",
             run_context_path=run_context(tmp_path),
             result_paths=[result(tmp_path, "camera-domain", "0")],
             output_path=tmp_path / "aggregate.json",
@@ -515,6 +727,7 @@ def test_aggregate_rejects_result_changed_after_loading(
 
     with pytest.raises(BundleValidationError, match="changed during aggregation"):
         aggregate_results(
+            scenario_path=FIXTURES / "scenario.yaml",
             run_context_path=context_path,
             result_paths=[camera_result, control_result],
             output_path=tmp_path / "aggregate.json",
@@ -525,8 +738,9 @@ def test_aggregate_rejects_transport_changed_after_loading(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    context_path = run_context(tmp_path)
     transport_qualification(tmp_path, relationship="link", consumer_link=2)
+    scenario_path = tmp_path / "transport-scenario.yaml"
+    context_path, results = transport_aggregate_inputs(tmp_path, scenario_path)
     qualification_path = tmp_path / "transport-qualification.json"
     original_load_document = load_document
 
@@ -543,11 +757,9 @@ def test_aggregate_rejects_transport_changed_after_loading(
 
     with pytest.raises(BundleValidationError, match="changed during aggregation"):
         aggregate_results(
+            scenario_path=scenario_path,
             run_context_path=context_path,
-            result_paths=[
-                result(tmp_path, "camera-domain", "0"),
-                result(tmp_path, "control-domain", "1"),
-            ],
+            result_paths=results,
             transport_qualification_path=qualification_path,
             output_path=tmp_path / "aggregate.json",
         )
@@ -560,7 +772,7 @@ def test_transport_qualification_proves_span_link(tmp_path: Path) -> None:
         consumer_link=2,
     )
 
-    assert result["schema_version"] == "transport-qualification-result.v1"
+    assert result["schema_version"] == "transport-qualification-result.v2"
     assert result["verdict"]["status"] == "passed"
     assert result["causal_chains"][0]["root_trace_id"] == TRACE_ID
     assert result["causal_chains"][0]["hops"][0]["relationship"] == "link"
@@ -570,6 +782,79 @@ def test_transport_qualification_proves_span_link(tmp_path: Path) -> None:
     channel = result["channel_contracts"][0]
     assert channel["source_domain_id"] == "camera-domain"
     assert channel["destination_domain_id"] == "control-domain"
+
+
+def test_transport_qualification_binds_cross_domain_clock_relation(tmp_path: Path) -> None:
+    scenario_path = transport_scenario(tmp_path)
+    producer = trace_file(
+        tmp_path,
+        "camera-domain",
+        "observation publish",
+        2,
+        message_id="message-1",
+    )
+    consumer = trace_file(
+        tmp_path,
+        "control-domain",
+        "observation receive",
+        3,
+        message_id="message-1",
+        link_byte=2,
+    )
+    channel_path = channel_contract(tmp_path, "link")
+    relation = clock_relation(tmp_path, scenario_path, producer)
+
+    output = evaluate_transport_qualification(
+        run_id=RUN_ID,
+        scenario_path=scenario_path,
+        causal_chain_paths=(causal_chain(tmp_path, channel_path),),
+        channel_contract_paths=(channel_path,),
+        trace_paths={"camera-domain": producer, "control-domain": consumer},
+        evidence_index_paths={
+            "camera-domain": trace_evidence_index(tmp_path, "camera-domain", producer),
+            "control-domain": trace_evidence_index(tmp_path, "control-domain", consumer),
+        },
+        clock_relation_paths=(relation,),
+        observation_output_dir=tmp_path / "transport-observations",
+        output_path=tmp_path / "transport-qualification-v2.json",
+    )
+    document = json.loads(output.read_text(encoding="utf-8"))
+
+    assert document["schema_version"] == "transport-qualification-result.v2"
+    assert document["clock_relations"][0]["status"] == "passed"
+
+
+def test_transport_qualification_is_incomplete_without_clock_relation(
+    tmp_path: Path,
+) -> None:
+    scenario_path = transport_scenario(tmp_path)
+    producer = trace_file(tmp_path, "camera-domain", "observation publish", 2)
+    consumer = trace_file(
+        tmp_path,
+        "control-domain",
+        "observation receive",
+        3,
+        link_byte=2,
+    )
+    channel_path = channel_contract(tmp_path, "link")
+
+    output = evaluate_transport_qualification(
+        run_id=RUN_ID,
+        scenario_path=scenario_path,
+        causal_chain_paths=(causal_chain(tmp_path, channel_path),),
+        channel_contract_paths=(channel_path,),
+        trace_paths={"camera-domain": producer, "control-domain": consumer},
+        evidence_index_paths={
+            "camera-domain": trace_evidence_index(tmp_path, "camera-domain", producer),
+            "control-domain": trace_evidence_index(tmp_path, "control-domain", consumer),
+        },
+        observation_output_dir=tmp_path / "transport-observations",
+        output_path=tmp_path / "transport-qualification-v2.json",
+    )
+    document = json.loads(output.read_text(encoding="utf-8"))
+
+    assert document["clock_relations"] == []
+    assert document["verdict"]["status"] == "incomplete"
 
 
 def test_transport_qualification_fails_measured_delivery_loss(tmp_path: Path) -> None:

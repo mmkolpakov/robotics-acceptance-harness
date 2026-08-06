@@ -68,11 +68,33 @@ class FakeNode:
     def get_service_names_and_types(self) -> list[tuple[str, list[str]]]:
         return [("/camera/get_parameters", ["rcl_interfaces/srv/GetParameters"])]
 
-    def count_services(self, _name: str) -> int:
-        return 1
+    def get_name(self) -> str:
+        return "robotics_acceptance_observer"
+
+    def get_namespace(self) -> str:
+        return "/"
 
     def get_node_names_and_namespaces(self) -> list[tuple[str, str]]:
-        return [("application", "/")]
+        return [("application", "/"), ("robotics_acceptance_observer", "/")]
+
+    def get_client_names_and_types_by_node(
+        self,
+        node_name: str,
+        _node_namespace: str,
+    ) -> list[tuple[str, list[str]]]:
+        if node_name == "robotics_acceptance_observer":
+            return [("/camera/get_state", ["lifecycle_msgs/srv/GetState"])]
+        return [("/camera/get_parameters", ["rcl_interfaces/srv/GetParameters"])]
+
+    def get_service_names_and_types_by_node(
+        self,
+        _node_name: str,
+        _node_namespace: str,
+    ) -> list[tuple[str, list[str]]]:
+        return [
+            ("/camera/get_parameters", ["rcl_interfaces/srv/GetParameters"]),
+            ("/arm", ["example_interfaces/srv/Trigger"]),
+        ]
 
     def destroy_node(self) -> None:
         self.destroyed = True
@@ -254,7 +276,7 @@ def test_ros_observer_queries_forbidden_names_without_subscribing() -> None:
         expected_graph(),
         forbidden_graph={
             "topics": ["/cmd_vel"],
-            "services": ["/arm"],
+            "services": ["/arm", "/camera/get_state"],
             "actions": ["/land"],
         },
         observe_clock=False,
@@ -264,8 +286,10 @@ def test_ros_observer_queries_forbidden_names_without_subscribing() -> None:
     snapshot = observer.snapshot()
 
     assert snapshot.topics["/cmd_vel"].publishers == 1
-    assert snapshot.services["/arm"].servers == 1
-    assert snapshot.actions["/land"].servers == 0
-    assert snapshot.actions["/land"].clients == 1
+    assert snapshot.services["/arm"].server_nodes == 1
+    assert snapshot.services["/arm"].client_nodes == 0
+    assert snapshot.services["/camera/get_state"].client_nodes == 0
+    assert snapshot.actions["/land"].server_nodes == 0
+    assert snapshot.actions["/land"].client_nodes == 1
     assert "/cmd_vel" not in node.callbacks
     observer.close()

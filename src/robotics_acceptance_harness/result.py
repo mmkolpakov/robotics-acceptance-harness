@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import mkstemp
 from typing import Any
 
-from junitparser import Error, Failure, JUnitXml, TestCase, TestSuite
+from junitparser import Error, Failure, JUnitXml, Skipped, TestCase, TestSuite
 from robotics_runtime_contracts import validate_document
 
 from robotics_acceptance_harness.documents import DocumentBundle
@@ -55,14 +55,24 @@ def _observed_graph(readiness: ReadinessResult) -> dict[str, Any]:
             if observation.first_message_at_ns is not None and observation.types
         ],
         "services": [
-            {"name": name, "type": observation.types[0], "servers": observation.servers}
+            {
+                "name": name,
+                "type": observation.types[0],
+                "server_nodes": observation.server_nodes,
+                "client_nodes": observation.client_nodes,
+            }
             for name, observation in sorted(snapshot.services.items())
-            if observation.servers > 0 and observation.types
+            if (observation.server_nodes > 0 or observation.client_nodes > 0) and observation.types
         ],
         "actions": [
-            {"name": name, "type": observation.types[0], "servers": observation.servers}
+            {
+                "name": name,
+                "type": observation.types[0],
+                "server_nodes": observation.server_nodes,
+                "client_nodes": observation.client_nodes,
+            }
             for name, observation in sorted(snapshot.actions.items())
-            if (observation.servers > 0 or observation.clients > 0) and observation.types
+            if (observation.server_nodes > 0 or observation.client_nodes > 0) and observation.types
         ],
     }
 
@@ -95,7 +105,7 @@ def _authorization_result(bundle: DocumentBundle) -> dict[str, Any]:
     if execution["target_environment"] == "simulation":
         return {"mode": "none"}
     if bundle.permit is None or bundle.verification is None:
-        raise ValueError("physical acceptance-result.v4 requires verified authorization")
+        raise ValueError("physical acceptance result requires verified authorization")
     return {
         "mode": "verified_execution_permit",
         "permit_sha256": bundle.permit.sha256,
@@ -143,6 +153,7 @@ def build_acceptance_result(
     forbidden_graph: ForbiddenGraphObservation,
     hardware_timing: HardwareTimingObservation | None = None,
     hardware_timing_evidence_sha256: str | None = None,
+    evaluation_mode: str = "live",
 ) -> dict[str, Any]:
     """Build and validate the canonical per-domain acceptance result."""
 
@@ -153,32 +164,44 @@ def build_acceptance_result(
         "real_robot",
     }
     if physical and (hardware_timing is None or hardware_timing_evidence_sha256 is None):
-        raise ValueError("physical acceptance-result.v4 requires hardware timing evidence")
+        raise ValueError("physical acceptance result requires hardware timing evidence")
     if not physical and (
         hardware_timing is not None or hardware_timing_evidence_sha256 is not None
     ):
-        raise ValueError("simulation acceptance-result.v4 does not accept hardware timing")
+        raise ValueError("simulation acceptance result does not accept hardware timing")
 
+    effective_unevaluated = set(unevaluated)
+    effective_unevaluated.update(
+        f"$.assertions.{evaluation.assertion_id}"
+        for evaluation in assertions
+        if evaluation.status == "skipped"
+    )
     result_status = worst_status({evaluation.status for evaluation in assertions})
+    if result_status == "skipped" or (
+        result_status == "passed"
+        and any(evaluation.status == "skipped" for evaluation in assertions)
+    ):
+        result_status = "incomplete"
     if result_status == "passed" and (
         not forbidden_graph.passed
         or (hardware_timing is not None and not hardware_timing.within_policy)
     ):
         result_status = "failed"
-    evaluated = "$.time_authority_observation" not in unevaluated
+    evaluated = "$.time_authority_observation" not in effective_unevaluated
     if result_status != "error" and evaluated and not time_authority.within_policy:
         result_status = "failed"
-    elif result_status == "passed" and unevaluated:
+    elif result_status == "passed" and effective_unevaluated:
         result_status = "incomplete"
 
     result: dict[str, Any] = {
-        "schema_version": "acceptance-result.v4",
+        "schema_version": "acceptance-result.v5",
         "result_id": result_id,
         "run_id": run_id,
         "scenario_id": bundle.scenario.data["scenario_id"],
         "domain_id": domain_id,
         "verdict_scope": "domain",
-        "unevaluated": sorted(set(unevaluated)),
+        "evaluation_mode": evaluation_mode,
+        "unevaluated": sorted(effective_unevaluated),
         "scenario_sha256": bundle.scenario.sha256,
         "runtime_manifest_sha256": bundle.runtime.sha256,
         "started_at": format_utc_datetime(started_at),
@@ -188,10 +211,17 @@ def build_acceptance_result(
         "assertion_results": [
             {
                 "assertion_id": evaluation.assertion_id,
+                "source": evaluation.source,
                 "status": evaluation.status,
                 "observed_value": evaluation.observed_value,
                 "unit": evaluation.unit,
                 **({"message": evaluation.message} if evaluation.message else {}),
+                **({"namespace": evaluation.namespace} if evaluation.namespace else {}),
+                **(
+                    {"evidence_sha256": list(evaluation.evidence_sha256)}
+                    if evaluation.evidence_sha256
+                    else {}
+                ),
             }
             for evaluation in assertions
         ],
@@ -259,7 +289,7 @@ def write_contract_json(document: Mapping[str, Any], path: str | Path) -> Path:
     temporary_path = _temporary_path(destination)
     try:
         with temporary_path.open("w", encoding="utf-8", newline="\n") as temporary:
-            json.dump(document, temporary, indent=2, sort_keys=True)
+            json.dump(document, temporary, indent=2, sort_keys=True, allow_nan=False)
             temporary.write("\n")
             temporary.flush()
             os.fsync(temporary.fileno())
@@ -324,6 +354,8 @@ def write_junit_xml(result: Mapping[str, Any], path: str | Path) -> Path:
             case.result = [Failure(message or "acceptance assertion failed")]
         elif assertion["status"] == "error":
             case.result = [Error(message or "acceptance assertion error")]
+        elif assertion["status"] == "skipped":
+            case.result = [Skipped(message or "acceptance assertion skipped")]
         suite.add_testcase(case)
 
     destination = Path(path).expanduser().resolve()

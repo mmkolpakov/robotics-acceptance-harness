@@ -112,10 +112,17 @@ class CounterWindowAggregate:
 @dataclass(frozen=True, slots=True)
 class AssertionEvaluation:
     assertion_id: str
-    status: Literal["passed", "failed", "error"]
-    observed_value: float | int | None
+    status: Literal["passed", "failed", "error", "skipped"]
+    observed_value: float | int | str | bool | None
     unit: str
     message: str = ""
+    source: Literal["core", "product"] = "core"
+    namespace: str | None = None
+    evidence_sha256: tuple[str, ...] = ()
+
+
+class MetricDefinitionError(ValueError):
+    """Raised when observed OTLP instruments contradict their declarations."""
 
 
 def percentile(values: Sequence[float], quantile: float) -> float:
@@ -728,6 +735,129 @@ def _histogram_quantile_evaluation(
     return lower, _compare(operator, lower, threshold)
 
 
+def validate_metric_definitions(
+    definitions: Sequence[Mapping[str, Any]],
+    samples: Sequence[MetricPoint],
+) -> None:
+    """Fail before assertion evaluation when OTLP instrument identity has drifted."""
+
+    grouped: dict[str, list[MetricPoint]] = defaultdict(list)
+    for sample in samples:
+        grouped[sample.name].append(sample)
+    for definition in definitions:
+        name = str(definition["metric_name"])
+        observed = grouped.get(name, [])
+        if not observed:
+            continue
+        units = {sample.unit for sample in observed}
+        if units != {definition["unit"]}:
+            raise MetricDefinitionError(
+                f"declared metric {name!r} expects unit {definition['unit']!r}; "
+                f"observed {sorted(units)}"
+            )
+        kinds = {
+            "histogram" if isinstance(sample, HistogramSample) else sample.instrument_kind
+            for sample in observed
+        }
+        if kinds != {definition["instrument_kind"]}:
+            raise MetricDefinitionError(
+                f"declared metric {name!r} expects {definition['instrument_kind']}; "
+                f"observed {sorted(kinds)}"
+            )
+        temporalities = {
+            (
+                sample.temporality
+                if isinstance(sample, HistogramSample) or sample.instrument_kind == "sum"
+                else "instantaneous"
+            )
+            for sample in observed
+        }
+        if temporalities != {definition["temporality"]}:
+            raise MetricDefinitionError(
+                f"declared metric {name!r} expects temporality "
+                f"{definition['temporality']!r}; observed "
+                f"{sorted(str(item) for item in temporalities)}"
+            )
+        if definition.get("monotonic", False) and not all(
+            isinstance(sample, MetricSample)
+            and sample.instrument_kind == "sum"
+            and sample.monotonic
+            for sample in observed
+        ):
+            raise MetricDefinitionError(f"declared metric {name!r} is not monotonic")
+
+
+def _duration_evaluation(
+    assertion: Mapping[str, Any],
+    samples: Sequence[MetricPoint],
+    *,
+    window_start_ns: int,
+    window_end_ns: int,
+) -> tuple[float, bool]:
+    gauges = sorted(
+        (
+            sample
+            for sample in samples
+            if isinstance(sample, MetricSample) and sample.instrument_kind == "gauge"
+        ),
+        key=lambda sample: sample.observed_at_ns,
+    )
+    if len(gauges) != len(samples):
+        raise MetricAggregationError("duration predicates require gauge samples")
+    series = {_series_key(sample.attributes) for sample in gauges}
+    if len(series) != 1:
+        raise MetricAggregationError(
+            "duration predicate requires exactly one attribute series; narrow attribute_match"
+        )
+    max_gap_ns = int(float(assertion["max_sample_gap_sec"]) * 1_000_000_000)
+    timestamps = [sample.observed_at_ns for sample in gauges]
+    coverage_gaps = [
+        gap
+        for gap in (
+            timestamps[0] - window_start_ns,
+            *(right - left for left, right in zip(timestamps, timestamps[1:], strict=False)),
+            window_end_ns - timestamps[-1],
+        )
+        if gap > max_gap_ns
+    ]
+    if coverage_gaps:
+        raise MetricAggregationError(
+            "duration predicate has an uncovered sample gap of "
+            f"{max(coverage_gaps) / 1_000_000_000:.6g}s"
+        )
+
+    longest_true_ns = 0
+    longest_false_ns = 0
+    current_value: bool | None = None
+    current_duration_ns = 0
+    for index, sample in enumerate(gauges):
+        segment_start = max(sample.observed_at_ns, window_start_ns)
+        segment_end = (
+            min(gauges[index + 1].observed_at_ns, window_end_ns)
+            if index + 1 < len(gauges)
+            else window_end_ns
+        )
+        if segment_end <= segment_start:
+            continue
+        value = _compare(assertion["operator"], sample.value, assertion["threshold"])
+        if value != current_value:
+            current_value = value
+            current_duration_ns = 0
+        current_duration_ns += segment_end - segment_start
+        if value:
+            longest_true_ns = max(longest_true_ns, current_duration_ns)
+        else:
+            longest_false_ns = max(longest_false_ns, current_duration_ns)
+
+    requirement = assertion["duration_requirement"]
+    threshold_sec = float(requirement["duration_sec"])
+    if requirement["kind"] == "minimum_contiguous":
+        observed_sec = longest_true_ns / 1_000_000_000
+        return observed_sec, observed_sec >= threshold_sec
+    observed_sec = longest_false_ns / 1_000_000_000
+    return observed_sec, observed_sec <= threshold_sec
+
+
 def evaluate_metric_assertions(
     assertions: Sequence[Mapping[str, Any]],
     samples: Sequence[MetricPoint],
@@ -813,6 +943,25 @@ def evaluate_metric_assertions(
             continue
 
         try:
+            if assertion.get("kind") == "metric_duration":
+                observed, passed = _duration_evaluation(
+                    assertion,
+                    window,
+                    window_start_ns=start_ns,
+                    window_end_ns=end_ns,
+                )
+                requirement = assertion["duration_requirement"]
+                message = "" if passed else f"{requirement['kind']} {requirement['duration_sec']}s"
+                evaluations.append(
+                    AssertionEvaluation(
+                        assertion_id=assertion_id,
+                        status="passed" if passed else "failed",
+                        observed_value=observed,
+                        unit="s",
+                        message=message,
+                    )
+                )
+                continue
             histogram_quantile = assertion["aggregation"] in {"p50", "p95", "p99"} and all(
                 isinstance(sample, HistogramSample) for sample in metric_samples
             )

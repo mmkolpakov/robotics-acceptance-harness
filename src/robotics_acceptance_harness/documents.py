@@ -8,8 +8,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, NotRequired, TypedDict, cast
 
-import yaml
-from robotics_runtime_contracts import validate_document
+from robotics_runtime_contracts import (
+    SchemaCompatibilityError,
+    loads_mapping,
+    validate_companion_schema,
+    validate_document,
+)
 
 from robotics_acceptance_harness.authorization import (
     AuthorizationIssue,
@@ -129,11 +133,9 @@ def _read_mapping(path: Path) -> tuple[bytes, dict[str, Any]]:
     except OSError as error:
         raise BundleValidationError("$", f"cannot read {path}: {error}") from error
     try:
-        value = yaml.safe_load(raw)
-    except yaml.YAMLError as error:
+        value = loads_mapping(raw, source_name=str(path))
+    except ValueError as error:
         raise BundleValidationError("$", f"cannot parse {path}: {error}") from error
-    if not isinstance(value, dict):
-        raise BundleValidationError("$", f"{path} must contain a JSON or YAML mapping")
     return raw, value
 
 
@@ -271,7 +273,7 @@ def load_bundle(
 
     scenario = load_document(
         scenario_path,
-        expected_schemas={"acceptance-scenario.v4"},
+        expected_schemas={"acceptance-scenario.v4", "acceptance-scenario.v5"},
         extension_schemas=extension_schemas,
     )
     if runtime_path is None:
@@ -281,8 +283,16 @@ def load_bundle(
         )
     runtime = load_document(
         runtime_path,
-        expected_schemas={"runtime-manifest.v1", "runtime-manifest.v2"},
+        expected_schemas={"runtime-manifest.v1", "runtime-manifest.v2", "runtime-manifest.v3"},
     )
+    try:
+        validate_companion_schema(
+            scenario.schema_version,
+            "runtime_manifest",
+            runtime.schema_version,
+        )
+    except SchemaCompatibilityError as error:
+        raise BundleValidationError("$.runtime.schema_version", str(error)) from error
     model = (
         load_document(model_path, expected_schemas={"model-artifact-manifest.v1"})
         if model_path is not None

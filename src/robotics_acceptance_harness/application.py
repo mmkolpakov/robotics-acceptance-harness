@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from robotics_acceptance_harness.documents import DocumentBundle
+from robotics_acceptance_harness.evaluation import EvaluationContext, evaluate_acceptance
 from robotics_acceptance_harness.evidence import VerifiedEvidence, load_evidence_index
 from robotics_acceptance_harness.forbidden_graph import (
     ForbiddenGraphMonitor,
@@ -23,15 +24,11 @@ from robotics_acceptance_harness.metrics import (
     HistogramSample,
     MetricPoint,
     MetricSample,
-    evaluate_metric_assertions,
 )
 from robotics_acceptance_harness.otel import load_otlp_json_metrics
-from robotics_acceptance_harness.policy import (
-    evaluate_data_plane_policy,
-    evaluate_evidence_policy,
-)
 from robotics_acceptance_harness.readiness import (
     GraphObserver,
+    GraphSnapshot,
     ReadinessResult,
     wait_for_readiness,
 )
@@ -48,6 +45,7 @@ from robotics_acceptance_harness.timing import (
     TimingObservation,
     TimingValidationError,
     evaluate_timing,
+    utc_datetime_from_unix_ns,
 )
 
 
@@ -181,6 +179,7 @@ def _wait_for_evidence(
     path: str | Path,
     *,
     run_id: str,
+    scenario_schema: str,
     timeout_sec: float,
     poll_interval_sec: float,
     now_ns: Callable[[], int],
@@ -193,7 +192,11 @@ def _wait_for_evidence(
             raise VerificationError(f"finalized evidence index did not appear: {source}")
         remaining_sec = max(0.0, (deadline_ns - now_ns()) / 1_000_000_000)
         sleep_fn(min(poll_interval_sec, remaining_sec))
-    return load_evidence_index(source, expected_run_id=run_id)
+    return load_evidence_index(
+        source,
+        expected_run_id=run_id,
+        scenario_schema=scenario_schema,
+    )
 
 
 def run_verification(
@@ -295,6 +298,7 @@ def run_verification(
     evidence = _wait_for_evidence(
         evidence_index_path,
         run_id=run_id,
+        scenario_schema=bundle.scenario.schema_version,
         timeout_sec=float(scenario["timeouts"]["shutdown_sec"]),
         poll_interval_sec=poll_interval_sec,
         now_ns=now_ns,
@@ -359,24 +363,18 @@ def run_verification(
                 message=str(error),
             )
     assertions = list(
-        evaluate_metric_assertions(
-            scenario["assertions"],
-            metric_samples,
-            window_start_ns=measurement_started_ns,
-            window_end_ns=measurement_finished_ns,
+        evaluate_acceptance(
+            EvaluationContext(
+                run_id=run_id,
+                domain_id=domain_id,
+                bundle=bundle,
+                evidence=evidence,
+                metric_samples=metric_samples,
+                window_start_ns=measurement_started_ns,
+                window_end_ns=measurement_finished_ns,
+            )
         )
     )
-    assertions.extend(
-        evaluate_data_plane_policy(
-            scenario["data_plane_policy"],
-            bundle.runtime_data,
-            metric_samples,
-            domain_id=domain_id,
-            window_start_ns=measurement_started_ns,
-            window_end_ns=measurement_finished_ns,
-        )
-    )
-    assertions.extend(evaluate_evidence_policy(scenario["evidence_policy"], evidence))
     if timing_failure is not None:
         assertions.append(timing_failure)
     forbidden_observation: ForbiddenGraphObservation = forbidden_monitor.result()
@@ -420,6 +418,107 @@ def run_verification(
         hardware_timing_evidence_sha256=(
             metrics_evidence_sha256 if hardware_timing is not None else None
         ),
+    )
+    destination = Path(output_dir).expanduser().resolve()
+    result_path = write_contract_json(result, destination / "acceptance-result.json")
+    junit_path = write_junit_xml(result, destination / "junit.xml")
+    return VerificationOutputs(result, result_path, junit_path)
+
+
+def evaluate_from_evidence(
+    *,
+    run_id: str,
+    bundle: DocumentBundle,
+    domain_id: str,
+    run_context_path: str | Path,
+    evidence_index_path: str | Path,
+    otel_metrics_path: str | Path,
+    window_start_ns: int,
+    window_end_ns: int,
+    output_dir: str | Path,
+) -> VerificationOutputs:
+    """Evaluate finalized playback evidence without attaching to a ROS graph."""
+
+    if window_end_ns <= window_start_ns:
+        raise VerificationError("offline evaluation window must have positive duration")
+    run_context = load_run_context(
+        run_context_path,
+        run_id=run_id,
+        domain_id=domain_id,
+        scenario_id=str(bundle.scenario_data["scenario_id"]),
+        scenario_sha256=bundle.scenario.sha256,
+    )
+    evidence = load_evidence_index(
+        evidence_index_path,
+        expected_run_id=run_id,
+        scenario_schema=bundle.scenario.schema_version,
+    )
+    metrics_path = Path(otel_metrics_path).expanduser().resolve()
+    metric_link = evidence.local_files.get(metrics_path)
+    if metric_link is None or metric_link["media_type"] != "application/json":
+        raise VerificationError(
+            "OTLP metrics must be a verified local application/json evidence segment"
+        )
+    metric_samples = _measurement_metrics(
+        _run_domain_metrics(
+            load_otlp_json_metrics(
+                metrics_path,
+                expected_sha256=str(metric_link["sha256"]),
+            ),
+            run_id=run_id,
+            domain_id=domain_id,
+        ),
+        window_start_ns=window_start_ns,
+        window_end_ns=window_end_ns,
+    )
+    assertions = evaluate_acceptance(
+        EvaluationContext(
+            run_id=run_id,
+            domain_id=domain_id,
+            bundle=bundle,
+            evidence=evidence,
+            metric_samples=metric_samples,
+            window_start_ns=window_start_ns,
+            window_end_ns=window_end_ns,
+        )
+    )
+    time_authority = evaluate_time_authority(
+        bundle.scenario_data["time_policy"],
+        metric_samples,
+        run_id=run_id,
+        domain_id=domain_id,
+        source_id=str(run_context.data["time_authority"]["source_id"]),
+        window_start_ns=window_start_ns,
+        window_end_ns=window_end_ns,
+    )
+    readiness = ReadinessResult(GraphSnapshot(window_end_ns), window_start_ns, 0.0)
+    result = build_acceptance_result(
+        result_id=f"result-{uuid4()}",
+        run_id=run_id,
+        domain_id=domain_id,
+        bundle=bundle,
+        readiness=readiness,
+        timing=TimingObservation(False, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        time_authority=time_authority,
+        time_authority_evidence_sha256=str(metric_link["sha256"]),
+        assertions=assertions,
+        unevaluated=(
+            "$.clock_observation",
+            "$.forbidden_graph_observation",
+            "$.observed_ros_graph",
+            "$.shutdown",
+        ),
+        started_at=utc_datetime_from_unix_ns(window_start_ns),
+        finished_at=utc_datetime_from_unix_ns(window_end_ns),
+        monotonic_duration_sec=(window_end_ns - window_start_ns) / 1_000_000_000,
+        shutdown={
+            "observer_detached": True,
+            "recorders_closed": True,
+            "evidence_index_finalized": evidence.index.data.get("finalized") is True,
+        },
+        evidence_index=evidence,
+        forbidden_graph=ForbiddenGraphObservation((), (), (), ()),
+        evaluation_mode="offline",
     )
     destination = Path(output_dir).expanduser().resolve()
     result_path = write_contract_json(result, destination / "acceptance-result.json")
