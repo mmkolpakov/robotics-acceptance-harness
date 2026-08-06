@@ -1,12 +1,28 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from robotics_acceptance_harness.timing import (
     ClockSample,
     TimingValidationError,
     evaluate_timing,
+    utc_datetime_from_unix_ns,
 )
+
+
+def test_unix_nanoseconds_are_converted_without_float_rounding() -> None:
+    assert utc_datetime_from_unix_ns(1_785_067_200_123_456_789) == datetime(
+        2026,
+        7,
+        26,
+        12,
+        0,
+        0,
+        123456,
+        tzinfo=UTC,
+    )
 
 
 def test_realtime_timing_passes_at_policy_boundary() -> None:

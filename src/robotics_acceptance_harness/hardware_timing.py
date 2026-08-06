@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from statistics import pstdev
 from typing import Any
 
 from robotics_runtime_contracts import hardware_clock_within_policy
 
 from robotics_acceptance_harness.metrics import MetricSample
+from robotics_acceptance_harness.timing import utc_datetime_from_unix_ns
 
 OFFSET_METRIC = "robotics.hardware.clock.offset"
 DRIFT_METRIC = "robotics.hardware.clock.drift"
@@ -139,11 +140,7 @@ def evaluate_hardware_timing(
         },
         monotonic=monotonic,
     )
-    seconds, nanoseconds = divmod(points[-1][0], 1_000_000_000)
-    measured_at = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(
-        seconds=seconds,
-        microseconds=nanoseconds // 1_000,
-    )
+    measured_at = utc_datetime_from_unix_ns(points[-1][0])
     return HardwareTimingObservation(
         sync_protocol=protocol,
         source=source,

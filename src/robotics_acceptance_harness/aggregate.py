@@ -12,6 +12,7 @@ from robotics_acceptance_harness.documents import BundleValidationError, load_do
 from robotics_acceptance_harness.evidence import load_evidence_index
 from robotics_acceptance_harness.result import format_utc_datetime, write_contract_json
 from robotics_acceptance_harness.status import worst_status
+from robotics_acceptance_harness.timing import utc_datetime_from_unix_ns
 from robotics_acceptance_harness.traces import (
     CausalHop,
     ChainViolation,
@@ -364,14 +365,8 @@ def evaluate_transport_qualification(
         channel_id = str(contract.data["channel_id"])
         observation = evaluate_channel_delivery(contract.data, spans_by_domain)
         if observation.started_at_ns:
-            started_at = datetime.fromtimestamp(
-                observation.started_at_ns / 1_000_000_000,
-                tz=UTC,
-            )
-            finished_at = datetime.fromtimestamp(
-                observation.finished_at_ns / 1_000_000_000,
-                tz=UTC,
-            )
+            started_at = utc_datetime_from_unix_ns(observation.started_at_ns)
+            finished_at = utc_datetime_from_unix_ns(observation.finished_at_ns)
         else:
             finished_at = evaluated_at
             started_at = evaluated_at - timedelta(

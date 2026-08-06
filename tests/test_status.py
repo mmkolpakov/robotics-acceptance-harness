@@ -13,6 +13,7 @@ from robotics_acceptance_harness.status import worst_status
         ({"passed", "cancelled"}, True, "incomplete"),
         ({"incomplete", "failed"}, False, "failed"),
         ({"failed", "error"}, False, "error"),
+        ({"error", "unknown"}, False, "unknown"),
     ],
 )
 def test_worst_status(

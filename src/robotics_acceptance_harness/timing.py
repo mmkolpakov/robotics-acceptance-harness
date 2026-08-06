@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from robotics_acceptance_harness.readiness import ReadinessIssue
+
+_UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def utc_datetime_from_unix_ns(timestamp_ns: int) -> datetime:
+    """Convert an integer Unix timestamp without passing through a float."""
+
+    seconds, nanoseconds = divmod(timestamp_ns, 1_000_000_000)
+    return _UNIX_EPOCH + timedelta(seconds=seconds, microseconds=nanoseconds // 1_000)
 
 
 class TimingValidationError(ValueError):
