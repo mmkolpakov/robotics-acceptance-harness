@@ -53,8 +53,11 @@ published by
 | Create an immutable run context | `robotics-acceptance create-run` | No |
 | Validate and explain an execution bundle | `robotics-acceptance explain` | No |
 | Observe a running execution and decide a verdict | `robotics-acceptance verify` | No |
+| Re-evaluate finalized evidence | `robotics-acceptance evaluate` | No |
 | Aggregate the complete set of domain results | `robotics-acceptance aggregate` | No |
 | Qualify transport without a domain execution | `robotics-acceptance transport-evaluate` | No |
+| Aggregate repeated runs | `robotics-acceptance campaign` | No |
+| Inspect readiness or a verdict | `robotics-acceptance doctor`, `why` | No |
 | Reuse a validated simulation bundle in project tests | `robotics_bundle` pytest fixture | No |
 
 ## Baseline
@@ -62,11 +65,11 @@ published by
 | Component | Supported baseline |
 | --- | --- |
 | Python | 3.12 and 3.13 |
-| Contracts | `robotics-runtime-contracts>=0.14,<0.15` |
-| Scenarios | `acceptance-scenario.v4` |
-| Results | `acceptance-result.v4` |
+| Contracts | `robotics-runtime-contracts>=0.15,<0.16` |
+| Scenarios | `acceptance-scenario.v5` (`v4` remains readable) |
+| Results | `acceptance-result.v5` (`v4` remains readable) |
 | Aggregates | `acceptance-aggregate.v4` |
-| Transport qualification | `transport-qualification-result.v1` |
+| Transport qualification | `transport-qualification-result.v2` (`v1` without clock relations) |
 | ROS observation | ROS 2 Jazzy with `rclpy` and declared message packages |
 | Metrics | Newline-delimited OTLP JSON from the Collector file exporter |
 
@@ -77,11 +80,11 @@ this package alone does not qualify a target.
 
 ## Install
 
-Install the attested `v0.15.1` release with its exact contracts baseline:
+Install the attested `v0.16.0` release with its exact contracts baseline:
 
 ```bash
-CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.14.1/robotics_runtime_contracts-0.14.1-py3-none-any.whl
-HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.15.1/robotics_acceptance_harness-0.15.1-py3-none-any.whl
+CONTRACTS=https://github.com/mmkolpakov/robotics-runtime-contracts/releases/download/v0.15.0/robotics_runtime_contracts-0.15.0-py3-none-any.whl
+HARNESS=https://github.com/mmkolpakov/robotics-acceptance-harness/releases/download/v0.16.0/robotics_acceptance_harness-0.16.0-py3-none-any.whl
 uv tool install \
   --with "${CONTRACTS}" \
   "${HARNESS}"
@@ -163,12 +166,29 @@ The recorder finalizes its evidence index only after the harness creates
 `--measurement-complete`. The OTLP file is accepted only when that index covers
 its exact path, media type, byte size, and SHA-256 digest.
 
+For finalized retained evidence, run the same metric, evidence, and product
+evaluators without joining a ROS graph:
+
+```bash
+robotics-acceptance evaluate \
+  --scenario scenario.yaml --runtime runtime.json \
+  --run-id "$RUN_ID" --domain-id cell --run-context acceptance-run.json \
+  --evidence-index evidence-index.json --otel-metrics metrics.otlp.json \
+  --window-start-ns 1786000000000000000 \
+  --window-end-ns 1786000030000000000 \
+  --output results
+```
+
+Offline results explicitly mark live graph, clock, safety-boundary, and shutdown
+observations as unevaluated, so they cannot claim a complete passing verdict.
+
 ## Aggregate Results
 
 Aggregate exactly the domains declared by one immutable run context:
 
 ```bash
 robotics-acceptance aggregate \
+  --scenario /run/robotics/scenario.yaml \
   --run-context /run/robotics/acceptance-run.json \
   --result /run/robotics/domain-a/acceptance-result.json \
   --result /run/robotics/domain-b/acceptance-result.json \
@@ -176,9 +196,10 @@ robotics-acceptance aggregate \
   --output /run/robotics/acceptance-aggregate.json
 ```
 
-`transport-evaluate` checks channel delivery and causal traces without a
-scenario, runtime manifest, or per-domain result. It emits a
-`transport-qualification-result.v1` document and is the canonical interface for
+`transport-evaluate` checks channel delivery and causal traces without a runtime
+manifest or per-domain result. It requires the resolved scenario so the measured
+clock relation is evaluated against the scenario-owned policy, emits a
+`transport-qualification-result.v2` document, and is the canonical interface for
 qualifying bridges and isolated ROS domain transport. `aggregate` verifies and
 references that result by digest; omit `--transport-qualification` when
 cross-domain evidence was not evaluated. These commands return `0` for
@@ -190,22 +211,43 @@ that window. Producer message identifiers must be unique; repeated consumer
 identifiers are counted as duplicate deliveries and evaluated against the
 channel contract.
 
+Supply `--scenario PATH` and one `--clock-relation PATH` per measured directed
+cross-domain pair. Each relation copies the scenario policy, binds its digest,
+and references evidence retained by a supplied domain index. A missing pair
+produces `incomplete`, never `passed`. Repeated run aggregates can then be
+summarized with `campaign`; the command never schedules or repeats workloads:
+
+```bash
+robotics-acceptance campaign \
+  --scenario scenario.yaml \
+  --run-context run-a.json --aggregate aggregate-a.json \
+  --run-context run-b.json --aggregate aggregate-b.json \
+  --minimum-passed-runs 2 \
+  --output campaign-summary.json
+```
+
+Run contexts and aggregates are paired by argument order and must reference the
+same resolved scenario digest.
+
 ## Inputs
 
 | Input | Required when | Contract |
 | --- | --- | --- |
-| Scenario | `explain`, `verify`, pytest | `acceptance-scenario.v4` |
-| Runtime manifest | `explain`, `verify`, pytest | `runtime-manifest.v2` (`v1` remains readable) |
+| Scenario | `explain`, `verify`, `evaluate`, pytest | `acceptance-scenario.v5` (`v4` readable) |
+| Runtime manifest | `explain`, `verify`, `evaluate`, pytest | `runtime-manifest.v3` (`v1`/`v2` readable) |
 | Model manifest | Inference workload | `model-artifact-manifest.v1` |
 | Dataset manifest | MCAP playback | `dataset-manifest.v1` |
 | Execution permit | HIL or real target | `execution-permit.v1` |
 | Verification record | HIL or real target | `execution-verification.v1` |
-| Evidence index | `verify` | `evidence-index.v2` |
+| Evidence index | `verify`, `evaluate` | `evidence-index.v3` (`v2` readable) |
 | Metrics | Metric assertions or physical observation | OTLP JSON |
 | Run context | `verify`, `aggregate` | `acceptance-run.v1` |
-| Channel and causal-chain contracts | `transport-evaluate` | `zenoh-channel.v1`, `causal-chain.v1` |
+| Channel, clock, and causal-chain contracts | `transport-evaluate` | `zenoh-channel.v1`, `clock-relation.v1`, `causal-chain.v1` |
 
-Local domain extensions remain explicit and digest-pinned:
+Local domain extensions remain explicit and digest-pinned. Supply the same
+`--extension-schema URI=PATH` arguments to every command that reads the
+scenario, including `create-run`, `aggregate`, `transport-evaluate`, and
+`campaign`:
 
 ```bash
 robotics-acceptance explain \
@@ -283,8 +325,27 @@ Supply scenario extensions with repeated
 digest-pinned schema declaration and the schema's `$id`.
 
 Use `robotics_bundle` for the cross-checked bundle or `robotics_scenario` for
-the immutable scenario mapping. The plugin exposes no permit option and refuses
+the immutable scenario mapping. Pass `--robotics-run-context` to expose the
+immutable `robotics_run_context` fixture. Tests can use
+`@pytest.mark.robotics_assertion("assertion-id")`; collection fails when the ID is
+not declared by the scenario. The plugin exposes no permit option and refuses
 physical targets.
+
+## Product Evaluators
+
+Product packages extend verdicts through the standard Python entry-point group
+`robotics_acceptance.evaluators`:
+
+```toml
+[project.entry-points."robotics_acceptance.evaluators"]
+"org.example.sorting" = "sorting_acceptance:evaluate"
+```
+
+The callable receives an immutable `EvaluationContext` and returns
+`AssertionEvaluation` objects marked with `source="product"`, its entry-point
+namespace, and at least one SHA-256 already present in the verified evidence
+index. Duplicate IDs, foreign namespaces, unknown digests, and non-callable
+entry points fail closed. Live and offline commands invoke this same API.
 
 ## Environment and CLI
 
@@ -302,7 +363,8 @@ Live ROS observation inherits standard ROS environment from the runtime:
 | `ROS_SECURITY_STRATEGY` | Use `Enforce` for a protected deployment |
 | `ROS_SECURITY_KEYSTORE` | Locate the externally provisioned SROS2 keystore |
 
-`explain`, `aggregate`, and `transport-evaluate` do not join a ROS graph. A
+`explain`, `evaluate`, `aggregate`, `campaign`, `doctor`, `why`, and
+`transport-evaluate` do not join a ROS graph. A
 `run_id` uses the canonical lowercase `run-<uuid4>` form. For complete command
 syntax, use `robotics-acceptance COMMAND --help`.
 

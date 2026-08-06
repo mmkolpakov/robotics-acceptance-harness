@@ -22,12 +22,14 @@ def create_run_context(
     time_source: str,
     run_id: str | None = None,
     now: datetime | None = None,
+    extension_schemas: Mapping[str, bytes | str] | None = None,
 ) -> str:
     """Create and validate the immutable context for one acceptance run."""
 
     scenario = load_document(
         scenario_path,
-        expected_schemas={"acceptance-scenario.v4"},
+        expected_schemas={"acceptance-scenario.v4", "acceptance-scenario.v5"},
+        extension_schemas=extension_schemas,
     )
     resolved_run_id = run_id or f"run-{uuid4()}"
     created_at = (now or datetime.now(UTC)).astimezone(UTC)

@@ -9,6 +9,8 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from robotics_runtime_contracts import SchemaCompatibilityError, validate_companion_schema
+
 from robotics_acceptance_harness.documents import (
     BundleValidationError,
     LoadedDocument,
@@ -130,16 +132,26 @@ def load_evidence_index(
     path: str | Path,
     *,
     expected_run_id: str | None = None,
+    scenario_schema: str | None = None,
 ) -> VerifiedEvidence:
     """Validate a finalized index and verify every reusable evidence link."""
 
     try:
         document = load_document(
             path,
-            expected_schemas={"evidence-index.v2"},
+            expected_schemas={"evidence-index.v2", "evidence-index.v3"},
         )
     except BundleValidationError as error:
         raise EvidenceValidationError(error.json_path, error.validation_message) from error
+    if scenario_schema is not None:
+        try:
+            validate_companion_schema(
+                scenario_schema,
+                "evidence_index",
+                document.schema_version,
+            )
+        except SchemaCompatibilityError as error:
+            raise EvidenceValidationError("$.schema_version", str(error)) from error
     if expected_run_id is not None and document.data["run_id"] != expected_run_id:
         raise EvidenceValidationError(
             "$.run_id",

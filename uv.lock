@@ -173,6 +173,15 @@ wheels = [
 ]
 
 [[package]]
+name = "json-merge-patch"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a5/eb/776e896abba05e810022a2ddd907f0b761164330f259279079ee81fe1898/json_merge_patch-0.3.0.tar.gz", hash = "sha256:4a022d78fc2f09cb49d96c646efc380d3b5ead2b5c7dabe22c3928c2c2e9c4e0", size = 5026, upload-time = "2025-03-25T09:48:41.542Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/c1/fb2c66d92b5d0167c57042b784456ee3f8531a997726c88cf6f012a22da6/json_merge_patch-0.3.0-py3-none-any.whl", hash = "sha256:e0a593719b293ff63858ecaae3afbcb4ff0b57f785453c6783d7b0c3e2708b76", size = 5482, upload-time = "2025-03-25T09:48:40.4Z" },
+]
+
+[[package]]
 name = "jsonpointer"
 version = "3.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -528,7 +537,7 @@ wheels = [
 
 [[package]]
 name = "robotics-acceptance-harness"
-version = "0.15.1"
+version = "0.16.0"
 source = { editable = "." }
 dependencies = [
     { name = "junitparser" },
@@ -578,17 +587,21 @@ dev = [
 
 [[package]]
 name = "robotics-runtime-contracts"
-version = "0.14.1"
+version = "0.15.0"
 source = { editable = "../robotics-runtime-contracts" }
 dependencies = [
+    { name = "json-merge-patch" },
     { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "pyyaml" },
+    { name = "referencing" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "json-merge-patch", specifier = "==0.3.0" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26,<5" },
     { name = "pyyaml", specifier = ">=6.0.3,<7" },
+    { name = "referencing", specifier = ">=0.37,<0.38" },
 ]
 
 [package.metadata.requires-dev]

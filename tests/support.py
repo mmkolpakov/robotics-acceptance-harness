@@ -160,9 +160,10 @@ def evidence_index(
     *,
     recording_mode: str = "on_failure",
     upload_mode: str = "local_only",
+    schema_version: str = "evidence-index.v2",
 ) -> dict[str, Any]:
     return {
-        "schema_version": "evidence-index.v2",
+        "schema_version": schema_version,
         "run_id": run_id,
         "generated_at": "2026-07-26T12:00:02Z",
         "finalized": True,
@@ -185,6 +186,7 @@ def write_evidence_index(
     segments: Sequence[Mapping[str, Any]],
     recording_mode: str = "on_failure",
     upload_mode: str = "local_only",
+    schema_version: str = "evidence-index.v2",
 ) -> Path:
     path.write_text(
         yaml.safe_dump(
@@ -193,6 +195,7 @@ def write_evidence_index(
                 segments,
                 recording_mode=recording_mode,
                 upload_mode=upload_mode,
+                schema_version=schema_version,
             ),
             sort_keys=False,
         ),

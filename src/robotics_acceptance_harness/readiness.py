@@ -19,8 +19,8 @@ class TopicObservation:
 @dataclass(frozen=True, slots=True)
 class EndpointObservation:
     types: tuple[str, ...]
-    servers: int
-    clients: int = 0
+    server_nodes: int
+    client_nodes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +136,7 @@ def _check_endpoints(
         path = f"$.expected_ros_graph.{kind}[{index}]"
         name = expected["name"]
         observed = observed_endpoints.get(name)
-        if observed is None or observed.servers < 1:
+        if observed is None or observed.server_nodes < 1:
             issues.append(ReadinessIssue(path, f"{kind[:-1]} server {name} is absent"))
             continue
         if expected["type"] not in observed.types:

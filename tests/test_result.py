@@ -107,8 +107,8 @@ def test_result_omits_endpoints_that_lost_their_type(tmp_path: Path) -> None:
                 first_message_at_ns=1_000_000_000,
             )
         },
-        services={"/reset": EndpointObservation(types=(), servers=1)},
-        actions={"/move": EndpointObservation(types=(), servers=1, clients=1)},
+        services={"/reset": EndpointObservation(types=(), server_nodes=1)},
+        actions={"/move": EndpointObservation(types=(), server_nodes=1, client_nodes=1)},
     )
     inputs = result_inputs(tmp_path)
     inputs["readiness"] = ReadinessResult(snapshot, 1_000_000_000, 1.0)
@@ -159,3 +159,16 @@ def test_result_marks_declared_gap_incomplete(tmp_path: Path) -> None:
 
     assert result["status"] == "incomplete"
     assert "evidence_sha256" not in result["time_authority_observation"]
+
+
+def test_result_and_junit_mark_skipped_assertion_incomplete(tmp_path: Path) -> None:
+    inputs = result_inputs(tmp_path)
+    inputs["assertions"] = (AssertionEvaluation("optional-check", "skipped", "not-observed", "1"),)
+
+    result = build_acceptance_result(**inputs)
+
+    assert result["status"] == "incomplete"
+    assert result["unevaluated"] == ["$.assertions.optional-check"]
+    assert result["assertion_results"][0]["observed_value"] == "not-observed"
+    junit = JUnitXml.fromfile(write_junit_xml(result, tmp_path / "junit.xml"))
+    assert junit.skipped == 1

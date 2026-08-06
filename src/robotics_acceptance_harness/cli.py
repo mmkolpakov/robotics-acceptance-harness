@@ -11,10 +11,31 @@ from robotics_acceptance_harness.aggregate import (
     aggregate_results,
     evaluate_transport_qualification,
 )
-from robotics_acceptance_harness.application import explain_bundle, run_verification
+from robotics_acceptance_harness.application import (
+    evaluate_from_evidence,
+    explain_bundle,
+    run_verification,
+)
+from robotics_acceptance_harness.campaign import aggregate_campaign
+from robotics_acceptance_harness.diagnostics import (
+    doctor_report,
+    report_markdown,
+    why_report,
+    write_error_diagnostic,
+)
 from robotics_acceptance_harness.documents import DocumentBundle, load_bundle
 from robotics_acceptance_harness.extension_schemas import load_extension_schemas
 from robotics_acceptance_harness.run_context import create_run_context
+
+
+def _add_extension_schema_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--extension-schema",
+        action="append",
+        default=[],
+        metavar="URI=PATH",
+        help="Digest-pinned local extension schema; may be repeated.",
+    )
 
 
 def _add_bundle_arguments(parser: argparse.ArgumentParser) -> None:
@@ -24,13 +45,7 @@ def _add_bundle_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset", metavar="PATH")
     parser.add_argument("--permit", metavar="PATH")
     parser.add_argument("--verification", metavar="PATH")
-    parser.add_argument(
-        "--extension-schema",
-        action="append",
-        default=[],
-        metavar="URI=PATH",
-        help="Digest-pinned local extension schema; may be repeated.",
-    )
+    _add_extension_schema_argument(parser)
 
 
 def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
@@ -84,6 +99,7 @@ def _parser() -> argparse.ArgumentParser:
     create_run.add_argument("--time-authority", required=True, metavar="KIND")
     create_run.add_argument("--time-source", required=True, metavar="ID")
     create_run.add_argument("--run-id", metavar="RUN_ID")
+    _add_extension_schema_argument(create_run)
 
     explain = subparsers.add_parser("explain", help="Validate and explain an execution bundle.")
     _add_bundle_arguments(explain)
@@ -117,26 +133,78 @@ def _parser() -> argparse.ArgumentParser:
         help="Atomically create a marker after the measurement window closes.",
     )
     verify.add_argument("--output", required=True, metavar="DIR")
+    verify.add_argument("--diagnostic-output", metavar="PATH")
+
+    evaluate = subparsers.add_parser(
+        "evaluate",
+        help="Evaluate finalized playback evidence without attaching to ROS.",
+    )
+    _add_bundle_arguments(evaluate)
+    evaluate.add_argument("--run-id", required=True, metavar="RUN_ID")
+    evaluate.add_argument("--domain-id", required=True, metavar="DOMAIN_ID")
+    evaluate.add_argument("--run-context", required=True, metavar="PATH")
+    evaluate.add_argument("--evidence-index", required=True, metavar="PATH")
+    evaluate.add_argument("--otel-metrics", required=True, metavar="PATH")
+    evaluate.add_argument("--window-start-ns", required=True, type=int)
+    evaluate.add_argument("--window-end-ns", required=True, type=int)
+    evaluate.add_argument("--output", required=True, metavar="DIR")
+    evaluate.add_argument("--diagnostic-output", metavar="PATH")
 
     aggregate = subparsers.add_parser(
         "aggregate",
         help="Aggregate complete per-domain results for one run.",
     )
+    aggregate.add_argument("--scenario", required=True, metavar="PATH")
     aggregate.add_argument("--run-context", required=True, metavar="PATH")
     aggregate.add_argument("--result", required=True, action="append", metavar="PATH")
     aggregate.add_argument(
         "--transport-qualification",
         metavar="PATH",
-        help="Optional transport-qualification-result.v1 for the same run.",
+        help="Optional transport qualification for the same run.",
     )
     aggregate.add_argument("--output", required=True, metavar="PATH")
+    _add_extension_schema_argument(aggregate)
 
     transport_evaluate = subparsers.add_parser(
         "transport-evaluate",
         help="Evaluate channel delivery and causal traces without a domain execution.",
     )
     transport_evaluate.add_argument("--run-id", required=True, metavar="RUN_ID")
+    transport_evaluate.add_argument("--scenario", required=True, metavar="PATH")
+    _add_extension_schema_argument(transport_evaluate)
     _add_trace_arguments(transport_evaluate)
+    transport_evaluate.add_argument(
+        "--clock-relation",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Measured clock-relation contract; repeat for each directed domain pair.",
+    )
+
+    campaign = subparsers.add_parser(
+        "campaign",
+        help="Aggregate existing run verdicts into a campaign summary.",
+    )
+    campaign.add_argument("--scenario", required=True, metavar="PATH")
+    campaign.add_argument("--run-context", action="append", required=True, metavar="PATH")
+    campaign.add_argument("--aggregate", action="append", required=True, metavar="PATH")
+    campaign.add_argument("--minimum-passed-runs", required=True, type=int)
+    campaign.add_argument("--maximum-failed-runs", type=int, default=0)
+    campaign.add_argument("--maximum-incomplete-runs", type=int, default=0)
+    campaign.add_argument("--maximum-error-runs", type=int, default=0)
+    campaign.add_argument("--campaign-id")
+    campaign.add_argument("--output", required=True, metavar="PATH")
+    _add_extension_schema_argument(campaign)
+
+    doctor = subparsers.add_parser("doctor", help="Report runtime and evaluator readiness.")
+    doctor.add_argument("--format", choices=("json", "markdown"), default="json")
+    doctor.add_argument("--mode", choices=("live", "offline"), default="offline")
+    doctor.add_argument("--evidence-dir", metavar="PATH")
+    doctor.add_argument("--measurement-complete", metavar="PATH")
+
+    why = subparsers.add_parser("why", help="Explain an acceptance result verdict.")
+    why.add_argument("result", metavar="PATH")
+    why.add_argument("--format", choices=("json", "markdown"), default="json")
 
     return parser
 
@@ -166,7 +234,7 @@ def _bundle(arguments: argparse.Namespace) -> DocumentBundle:
 
 
 def _report_status(output: Path, status: str, key: str) -> int:
-    print(json.dumps({key: str(output), "status": status}, sort_keys=True))
+    print(json.dumps({key: str(output), "status": status}, sort_keys=True, allow_nan=False))
     return 0 if status == "passed" else 1
 
 
@@ -182,16 +250,57 @@ def main(argv: Sequence[str] | None = None) -> int:
                 time_authority=arguments.time_authority,
                 time_source=arguments.time_source,
                 run_id=arguments.run_id,
+                extension_schemas=load_extension_schemas(arguments.extension_schema),
             )
             print(run_id)
             return 0
 
+        if arguments.command == "doctor":
+            report = doctor_report(
+                mode=arguments.mode,
+                evidence_dir=arguments.evidence_dir,
+                measurement_complete=arguments.measurement_complete,
+            )
+            print(
+                report_markdown(report)
+                if arguments.format == "markdown"
+                else json.dumps(report, indent=2, sort_keys=True, allow_nan=False)
+            )
+            return 0 if report["status"] == "passed" else 1
+
+        if arguments.command == "why":
+            report = why_report(arguments.result)
+            print(
+                report_markdown(report)
+                if arguments.format == "markdown"
+                else json.dumps(report, indent=2, sort_keys=True, allow_nan=False)
+            )
+            return 0
+
+        if arguments.command == "campaign":
+            output = aggregate_campaign(
+                scenario_path=arguments.scenario,
+                run_context_paths=arguments.run_context,
+                aggregate_paths=arguments.aggregate,
+                output_path=arguments.output,
+                minimum_passed_runs=arguments.minimum_passed_runs,
+                maximum_failed_runs=arguments.maximum_failed_runs,
+                maximum_incomplete_runs=arguments.maximum_incomplete_runs,
+                maximum_error_runs=arguments.maximum_error_runs,
+                campaign_id=arguments.campaign_id,
+                extension_schemas=load_extension_schemas(arguments.extension_schema),
+            )
+            result = json.loads(output.read_text(encoding="utf-8"))
+            return _report_status(output, result["verdict"]["status"], "campaign")
+
         if arguments.command == "aggregate":
             output = aggregate_results(
+                scenario_path=arguments.scenario,
                 run_context_path=arguments.run_context,
                 result_paths=arguments.result,
                 output_path=arguments.output,
                 transport_qualification_path=arguments.transport_qualification,
+                extension_schemas=load_extension_schemas(arguments.extension_schema),
             )
             aggregate = json.loads(output.read_text(encoding="utf-8"))
             status = aggregate["cross_domain_e2e"]["status"]
@@ -202,6 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "transport-evaluate":
             output = evaluate_transport_qualification(
                 run_id=arguments.run_id,
+                scenario_path=arguments.scenario,
                 causal_chain_paths=arguments.causal_chain,
                 channel_contract_paths=arguments.channel_contract,
                 trace_paths=_keyed_values(arguments.trace, "--trace"),
@@ -209,27 +319,42 @@ def main(argv: Sequence[str] | None = None) -> int:
                     arguments.evidence_index,
                     "--evidence-index",
                 ),
+                clock_relation_paths=arguments.clock_relation,
                 observation_output_dir=arguments.observation_output,
                 output_path=arguments.output,
+                extension_schemas=load_extension_schemas(arguments.extension_schema),
             )
             result = json.loads(output.read_text(encoding="utf-8"))
             return _report_status(output, result["verdict"]["status"], "qualification")
 
         bundle = _bundle(arguments)
         if arguments.command == "explain":
-            print(json.dumps(explain_bundle(bundle), indent=2, sort_keys=True))
+            print(json.dumps(explain_bundle(bundle), indent=2, sort_keys=True, allow_nan=False))
             return 0
 
-        outputs = run_verification(
-            run_id=arguments.run_id,
-            domain_id=arguments.domain_id,
-            run_context_path=arguments.run_context,
-            bundle=bundle,
-            evidence_index_path=arguments.evidence_index,
-            otel_metrics_path=arguments.otel_metrics,
-            measurement_complete_path=arguments.measurement_complete,
-            output_dir=arguments.output,
-        )
+        if arguments.command == "evaluate":
+            outputs = evaluate_from_evidence(
+                run_id=arguments.run_id,
+                domain_id=arguments.domain_id,
+                run_context_path=arguments.run_context,
+                bundle=bundle,
+                evidence_index_path=arguments.evidence_index,
+                otel_metrics_path=arguments.otel_metrics,
+                window_start_ns=arguments.window_start_ns,
+                window_end_ns=arguments.window_end_ns,
+                output_dir=arguments.output,
+            )
+        else:
+            outputs = run_verification(
+                run_id=arguments.run_id,
+                domain_id=arguments.domain_id,
+                run_context_path=arguments.run_context,
+                bundle=bundle,
+                evidence_index_path=arguments.evidence_index,
+                otel_metrics_path=arguments.otel_metrics,
+                measurement_complete_path=arguments.measurement_complete,
+                output_dir=arguments.output,
+            )
         print(
             json.dumps(
                 {
@@ -238,10 +363,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "junit": str(outputs.junit_path),
                 },
                 sort_keys=True,
+                allow_nan=False,
             )
         )
         return 0 if outputs.result["status"] == "passed" else 1
     except (OSError, RuntimeError, ValueError) as error:
+        diagnostic_output = getattr(arguments, "diagnostic_output", None)
+        if diagnostic_output:
+            write_error_diagnostic(
+                diagnostic_output,
+                command=str(arguments.command),
+                error=error,
+            )
         print(f"error: {error}", file=sys.stderr)
         return 2
 

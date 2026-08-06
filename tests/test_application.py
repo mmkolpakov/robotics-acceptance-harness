@@ -9,7 +9,11 @@ import pytest
 import yaml
 from junitparser import JUnitXml
 
-from robotics_acceptance_harness.application import VerificationError, run_verification
+from robotics_acceptance_harness.application import (
+    VerificationError,
+    evaluate_from_evidence,
+    run_verification,
+)
 from robotics_acceptance_harness.documents import DocumentBundle, load_bundle
 from robotics_acceptance_harness.readiness import GraphSnapshot, TopicObservation
 from robotics_acceptance_harness.time_authority import DELIVERY_LATENCY_METRIC
@@ -548,6 +552,48 @@ def test_verification_finalizes_measurement_before_reading_evidence(tmp_path: Pa
     assert observer.closed
 
 
+def test_offline_evaluation_reuses_retained_gazebo_evidence(tmp_path: Path) -> None:
+    bundle = _simulation_bundle(tmp_path)
+    metrics_path = tmp_path / "metrics.otlp.json"
+    _write_metrics(
+        metrics_path,
+        run_id=SIMULATION_RUN_ID,
+        domain_id=SIMULATION_DOMAIN,
+        source_id="simulation-clock",
+        start_ns=1_000_000_000,
+        end_ns=2_000_000_000,
+    )
+    evidence_path = _write_evidence(
+        tmp_path / "evidence.yaml",
+        metrics_path,
+        run_id=SIMULATION_RUN_ID,
+    )
+    context_path = _write_run_context(
+        tmp_path / "run.yaml",
+        bundle,
+        run_id=SIMULATION_RUN_ID,
+        domain_id=SIMULATION_DOMAIN,
+        time_kind="sim_clock",
+        source_id="simulation-clock",
+    )
+
+    outputs = evaluate_from_evidence(
+        run_id=SIMULATION_RUN_ID,
+        domain_id=SIMULATION_DOMAIN,
+        run_context_path=context_path,
+        bundle=bundle,
+        evidence_index_path=evidence_path,
+        otel_metrics_path=metrics_path,
+        window_start_ns=1_000_000_000,
+        window_end_ns=2_000_000_000,
+        output_dir=tmp_path / "offline-output",
+    )
+
+    assert outputs.result["evaluation_mode"] == "offline"
+    assert outputs.result["status"] == "incomplete"
+    assert "$.observed_ros_graph" in outputs.result["unevaluated"]
+
+
 def test_verification_rejects_a_stale_measurement_marker_before_observation(
     tmp_path: Path,
 ) -> None:
@@ -600,7 +646,8 @@ def test_physical_verification_emits_authorized_result(tmp_path: Path) -> None:
     outputs, observer = _physical_case(tmp_path)
     result = outputs.result
 
-    assert result["schema_version"] == "acceptance-result.v4"
+    assert result["schema_version"] == "acceptance-result.v5"
+    assert result["evaluation_mode"] == "live"
     assert result["status"] == "passed"
     assert result["authorization"]["mode"] == "verified_execution_permit"
     assert result["hardware_clock_observation"]["within_policy"] is True

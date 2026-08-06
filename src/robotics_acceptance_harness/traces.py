@@ -12,7 +12,7 @@ from google.protobuf.json_format import ParseDict
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
-from robotics_runtime_contracts import channel_observation_status
+from robotics_runtime_contracts import channel_observation_status, derive_channel_violations
 
 from robotics_acceptance_harness.otel import otlp_attributes, read_otlp_json_lines
 
@@ -706,47 +706,37 @@ def evaluate_channel_delivery(
                 message="consumer timestamp precedes producer completion",
             )
         )
-    if len(producers) < delivery["minimum_source_messages"]:
-        violations.append(
-            ChainViolation(
-                code="insufficient_messages",
-                channel_id=channel_id,
-                message=(
-                    f"observed {len(producers)} source messages; "
-                    f"requires {delivery['minimum_source_messages']}"
-                ),
-            )
-        )
     max_message_age_ms = max(message_ages, default=0.0)
-    limits = (
-        (
-            loss_ratio > delivery["max_loss_ratio"],
-            "loss_ratio_exceeded",
-            f"loss ratio {loss_ratio} exceeds {delivery['max_loss_ratio']}",
-        ),
-        (
-            duplicate_count > delivery["max_duplicate_count"],
-            "duplicate_count_exceeded",
-            f"duplicate count {duplicate_count} exceeds {delivery['max_duplicate_count']}",
-        ),
-        (
-            out_of_order_count > delivery["max_out_of_order_count"],
-            "out_of_order_count_exceeded",
-            (
-                f"out-of-order count {out_of_order_count} exceeds "
-                f"{delivery['max_out_of_order_count']}"
-            ),
-        ),
-        (
-            max_message_age_ms > delivery["max_message_age_ms"],
-            "message_age_exceeded",
-            (f"message age {max_message_age_ms} ms exceeds {delivery['max_message_age_ms']} ms"),
-        ),
+    existing_codes = {item.code for item in violations}
+    derived_codes = derive_channel_violations(
+        delivery,
+        sent_count=len(producers),
+        loss_ratio=loss_ratio,
+        duplicate_count=duplicate_count,
+        out_of_order_count=out_of_order_count,
+        max_message_age_ms=max_message_age_ms,
+        observation_duration_sec=(window_end_ns - window_start_ns) / 1_000_000_000,
+        reported_violation_codes=existing_codes,
     )
+    messages = {
+        "insufficient_messages": (
+            f"observed {len(producers)} source messages; "
+            f"requires {delivery['minimum_source_messages']}"
+        ),
+        "loss_ratio_exceeded": f"loss ratio {loss_ratio} exceeds {delivery['max_loss_ratio']}",
+        "duplicate_count_exceeded": (
+            f"duplicate count {duplicate_count} exceeds {delivery['max_duplicate_count']}"
+        ),
+        "out_of_order_count_exceeded": (
+            f"out-of-order count {out_of_order_count} exceeds {delivery['max_out_of_order_count']}"
+        ),
+        "message_age_exceeded": (
+            f"message age {max_message_age_ms} ms exceeds {delivery['max_message_age_ms']} ms"
+        ),
+    }
     violations.extend(
-        ChainViolation(code=code, channel_id=channel_id, message=message)
-        for exceeded, code, message in limits
-        if exceeded
+        ChainViolation(code=code, channel_id=channel_id, message=messages[code])
+        for code in sorted(derived_codes - existing_codes)
     )
     status = channel_observation_status(item.code for item in violations)
     return ChannelObservationEvaluation(

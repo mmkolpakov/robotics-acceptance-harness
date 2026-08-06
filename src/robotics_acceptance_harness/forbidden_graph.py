@@ -38,11 +38,11 @@ def find_forbidden_graph_violations(
             violations.append(ForbiddenGraphViolation("topic", str(name)))
     for name in forbidden_graph["services"]:
         observed_service = snapshot.services.get(str(name))
-        if observed_service is not None and observed_service.servers > 0:
+        if observed_service is not None and observed_service.server_nodes > 0:
             violations.append(ForbiddenGraphViolation("service", str(name)))
     for name in forbidden_graph["actions"]:
         observed_action = snapshot.actions.get(str(name))
-        if observed_action is not None and observed_action.servers > 0:
+        if observed_action is not None and observed_action.server_nodes > 0:
             violations.append(ForbiddenGraphViolation("action", str(name)))
     return tuple(sorted(violations))
 

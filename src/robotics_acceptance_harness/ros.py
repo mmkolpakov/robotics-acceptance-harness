@@ -166,33 +166,66 @@ class RosGraphObserver:
             if tracker.future is None and tracker.client.service_is_ready():
                 tracker.future = tracker.client.call_async(tracker.request_type())
 
+    def _external_nodes(self) -> tuple[tuple[str, str], ...]:
+        own = (self._node.get_name(), self._node.get_namespace())
+        return tuple(item for item in self._node.get_node_names_and_namespaces() if item != own)
+
     def _action_observations(self) -> dict[str, EndpointObservation]:
         observed_names = self._observed_names("actions")
         if not observed_names:
             return {}
         types: dict[str, set[str]] = {}
-        servers: dict[str, int] = {}
-        clients: dict[str, int] = {}
-        for node_name, node_namespace in self._node.get_node_names_and_namespaces():
+        server_nodes: dict[str, int] = {}
+        client_nodes: dict[str, int] = {}
+        for node_name, node_namespace in self._external_nodes():
             for name, action_types in self._get_action_server_names_and_types_by_node(
                 self._node,
                 node_name,
                 node_namespace,
             ):
                 types.setdefault(name, set()).update(action_types)
-                servers[name] = servers.get(name, 0) + 1
+                server_nodes[name] = server_nodes.get(name, 0) + 1
             for name, action_types in self._get_action_client_names_and_types_by_node(
                 self._node,
                 node_name,
                 node_namespace,
             ):
                 types.setdefault(name, set()).update(action_types)
-                clients[name] = clients.get(name, 0) + 1
+                client_nodes[name] = client_nodes.get(name, 0) + 1
         return {
             name: EndpointObservation(
                 types=tuple(sorted(types.get(name, ()))),
-                servers=servers.get(name, 0),
-                clients=clients.get(name, 0),
+                server_nodes=server_nodes.get(name, 0),
+                client_nodes=client_nodes.get(name, 0),
+            )
+            for name in observed_names
+        }
+
+    def _service_observations(self) -> dict[str, EndpointObservation]:
+        observed_names = self._observed_names("services")
+        if not observed_names:
+            return {}
+        types: dict[str, set[str]] = {}
+        server_nodes: dict[str, int] = {}
+        client_nodes: dict[str, int] = {}
+        for node_name, node_namespace in self._external_nodes():
+            for name, server_types in self._node.get_service_names_and_types_by_node(
+                node_name,
+                node_namespace,
+            ):
+                types.setdefault(name, set()).update(server_types)
+                server_nodes[name] = server_nodes.get(name, 0) + 1
+            for name, client_types in self._node.get_client_names_and_types_by_node(
+                node_name,
+                node_namespace,
+            ):
+                types.setdefault(name, set()).update(client_types)
+                client_nodes[name] = client_nodes.get(name, 0) + 1
+        return {
+            name: EndpointObservation(
+                types=tuple(sorted(types.get(name, ()))),
+                server_nodes=server_nodes.get(name, 0),
+                client_nodes=client_nodes.get(name, 0),
             )
             for name in observed_names
         }
@@ -228,14 +261,7 @@ class RosGraphObserver:
                 qos_compatible=(self._qos_compatible(name) if name in self._topic_qos else True),
             )
 
-        service_types = dict(self._node.get_service_names_and_types())
-        services = {
-            name: EndpointObservation(
-                types=tuple(service_types.get(name, ())),
-                servers=self._node.count_services(name),
-            )
-            for name in self._observed_names("services")
-        }
+        services = self._service_observations()
         actions = self._action_observations()
         lifecycle = {
             name: tracker.observation

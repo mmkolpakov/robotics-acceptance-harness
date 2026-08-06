@@ -102,6 +102,36 @@ def test_explain_loads_extension_schema_by_canonical_uri(
     assert json.loads(capsys.readouterr().out)["policy"] == "accepted-simulation"
 
 
+def test_create_run_loads_extension_schema_by_canonical_uri(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scenario, schema, uri = write_extended_scenario(tmp_path, FIXTURES / "scenario.yaml")
+    output = tmp_path / "acceptance-run.json"
+
+    exit_code = main(
+        [
+            "create-run",
+            "--scenario",
+            str(scenario),
+            "--extension-schema",
+            f"{uri}={schema}",
+            "--output",
+            str(output),
+            "--domain",
+            "primary=observer",
+            "--time-authority",
+            "sim_clock",
+            "--time-source",
+            "gazebo-clock",
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["scenario_sha256"]
+    assert capsys.readouterr().out.startswith("run-")
+
+
 def test_verify_requires_run_id(capsys) -> None:
     with pytest.raises(SystemExit) as caught:
         main(
@@ -203,6 +233,8 @@ def test_aggregate_forwards_transport_qualification(
     exit_code = main(
         [
             "aggregate",
+            "--scenario",
+            "scenario.yaml",
             "--run-context",
             "acceptance-run.json",
             "--result",
@@ -215,6 +247,7 @@ def test_aggregate_forwards_transport_qualification(
     )
 
     assert exit_code == 1
+    assert captured["scenario_path"] == "scenario.yaml"
     assert captured["transport_qualification_path"] == "transport-qualification.json"
     assert json.loads(capsys.readouterr().out)["status"] == "failed"
 
@@ -245,6 +278,8 @@ def test_transport_evaluate_maps_domain_evidence_and_reports_verdict(
             "transport-evaluate",
             "--run-id",
             "run-6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+            "--scenario",
+            "scenario.yaml",
             "--causal-chain",
             "causal-chain.json",
             "--channel-contract",
@@ -257,6 +292,8 @@ def test_transport_evaluate_maps_domain_evidence_and_reports_verdict(
             "source=source-evidence.json",
             "--evidence-index",
             "target=target-evidence.json",
+            "--clock-relation",
+            "clock-relation.json",
             "--observation-output",
             str(tmp_path / "observations"),
             "--output",
@@ -273,7 +310,84 @@ def test_transport_evaluate_maps_domain_evidence_and_reports_verdict(
         "source": "source-evidence.json",
         "target": "target-evidence.json",
     }
+    assert captured["clock_relation_paths"] == ["clock-relation.json"]
+    assert captured["scenario_path"] == "scenario.yaml"
     assert json.loads(capsys.readouterr().out) == {
         "qualification": str(output),
         "status": "passed",
     }
+
+
+def test_doctor_reports_extension_inventory(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["doctor"])
+
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert report["status"] == "passed"
+    assert isinstance(report["evaluators"], list)
+
+
+def test_doctor_fails_for_a_stale_measurement_marker(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    marker = tmp_path / "measurement-complete"
+    marker.touch()
+
+    exit_code = main(["doctor", "--measurement-complete", str(marker)])
+
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert report["status"] == "failed"
+    assert any(item["check_id"] == "measurement-marker" for item in report["checks"])
+
+
+def test_evaluate_forwards_offline_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_evaluate_from_evidence(**arguments: object) -> SimpleNamespace:
+        captured.update(arguments)
+        return SimpleNamespace(
+            result={"status": "incomplete"},
+            result_path=tmp_path / "acceptance-result.json",
+            junit_path=tmp_path / "junit.xml",
+        )
+
+    monkeypatch.setattr(
+        "robotics_acceptance_harness.cli.evaluate_from_evidence",
+        fake_evaluate_from_evidence,
+    )
+    exit_code = main(
+        [
+            "evaluate",
+            "--scenario",
+            str(FIXTURES / "scenario.yaml"),
+            "--runtime",
+            str(FIXTURES / "runtime.yaml"),
+            "--run-id",
+            "run-6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+            "--domain-id",
+            "primary",
+            "--run-context",
+            "run.json",
+            "--evidence-index",
+            "evidence.json",
+            "--otel-metrics",
+            "metrics.json",
+            "--window-start-ns",
+            "100",
+            "--window-end-ns",
+            "200",
+            "--output",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert captured["window_start_ns"] == 100
+    assert captured["window_end_ns"] == 200
+    assert json.loads(capsys.readouterr().out)["status"] == "incomplete"
