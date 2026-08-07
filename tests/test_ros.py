@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -34,14 +36,17 @@ class FakeClient:
 
 class FakeNode:
     def __init__(self) -> None:
-        self.callbacks: dict[str, object] = {}
+        self.callbacks: dict[str, Callable[[object], None]] = {}
         self.destroyed = False
+        self.executor_started = Event()
+        self.executor_stopped = Event()
+        self.shutdown_results: list[bool] = []
 
     def create_subscription(
         self,
         _message_type: object,
         topic: str,
-        callback: object,
+        callback: Callable[[object], None],
         _qos: object,
     ) -> object:
         self.callbacks[topic] = callback
@@ -108,8 +113,7 @@ class FakeExecutor:
     def add_node(self, node: FakeNode) -> None:
         self.node = node
 
-    def spin_once(self, *, timeout_sec: float) -> None:
-        assert timeout_sec == 0
+    def spin(self) -> None:
         assert self.node is not None
         for topic, callback in self.node.callbacks.items():
             message = (
@@ -118,6 +122,17 @@ class FakeExecutor:
                 else object()
             )
             callback(message)
+        self.node.executor_started.set()
+        self.node.executor_stopped.wait()
+
+    def shutdown(self, timeout_sec: float) -> bool:
+        assert timeout_sec == 5.0
+        assert self.node is not None
+        result = self.node.shutdown_results.pop(0) if self.node.shutdown_results else True
+        if not result:
+            return False
+        self.node.executor_stopped.set()
+        return True
 
     def remove_node(self, node: FakeNode) -> None:
         assert node is self.node
@@ -221,18 +236,64 @@ def test_ros_observer_reports_graph_clock_and_lifecycle_without_writing() -> Non
         module_loader=modules.__getitem__,
     )
 
+    assert node.executor_started.wait(timeout=1.0)
+    assert observer.clock_samples == ()
+    observer.start_clock_observation()
+    node.callbacks["/clock"](SimpleNamespace(clock=SimpleNamespace(sec=1, nanosec=2)))
+    observer.stop_clock_observation()
+    assert observer.clock_samples[-1].source_time_ns == 1_000_000_002
+    node.callbacks["/clock"](SimpleNamespace(clock=SimpleNamespace(sec=2, nanosec=0)))
+    assert len(observer.clock_samples) == 1
     observer.snapshot()
     snapshot = observer.snapshot()
 
     assert evaluate_graph(expected_graph(), snapshot) == ()
     assert snapshot.topics["/camera/image"].subscribers == 1
     assert snapshot.lifecycle_nodes["/camera"].state == "active"
-    assert observer.clock_samples[-1].source_time_ns == 1_000_000_002
     observer.close()
     observer.close()
+    assert node.executor_stopped.is_set()
     assert node.destroyed
     with pytest.raises(RosObserverError, match="closed"):
         observer.snapshot()
+
+
+def test_ros_observer_bounds_unique_clock_samples() -> None:
+    node = FakeNode()
+    observer = RosGraphObserver(
+        expected_graph(),
+        observe_clock=True,
+        module_loader=fake_modules(node).__getitem__,
+        max_clock_samples=1,
+    )
+
+    assert node.executor_started.wait(timeout=1.0)
+    observer.start_clock_observation()
+    node.callbacks["/clock"](SimpleNamespace(clock=SimpleNamespace(sec=1, nanosec=0)))
+    node.callbacks["/clock"](SimpleNamespace(clock=SimpleNamespace(sec=1, nanosec=0)))
+    node.callbacks["/clock"](SimpleNamespace(clock=SimpleNamespace(sec=2, nanosec=0)))
+    with pytest.raises(RosObserverError, match="exceeded the configured limit"):
+        observer.stop_clock_observation()
+    observer.close()
+
+
+def test_ros_observer_keeps_failed_shutdown_terminal_but_retryable() -> None:
+    node = FakeNode()
+    node.shutdown_results = [False, True]
+    observer = RosGraphObserver(
+        expected_graph(),
+        observe_clock=True,
+        module_loader=fake_modules(node).__getitem__,
+    )
+
+    assert node.executor_started.wait(timeout=1.0)
+    with pytest.raises(RosObserverError, match="did not stop"):
+        observer.close()
+    with pytest.raises(RosObserverError, match="closing"):
+        observer.snapshot()
+    assert not node.destroyed
+    observer.close()
+    assert node.destroyed
 
 
 def test_ros_observer_context_manager_detaches() -> None:
