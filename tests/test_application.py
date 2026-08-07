@@ -48,11 +48,20 @@ class FakeObserver:
         self.forbidden_publishers = forbidden_publishers
         self.physical = physical
         self._clock_samples: list[ClockSample] = []
+        self._record_clock = True
         self.closed = False
 
     @property
     def clock_samples(self) -> tuple[ClockSample, ...]:
         return tuple(self._clock_samples)
+
+    def start_clock_observation(self) -> None:
+        self._clock_samples.clear()
+        self._record_clock = True
+
+    def stop_clock_observation(self) -> tuple[ClockSample, ...]:
+        self._record_clock = False
+        return self.clock_samples
 
     def snapshot(self) -> GraphSnapshot:
         if self.physical:
@@ -66,7 +75,9 @@ class FakeObserver:
                     )
                 },
             )
-        if not self._clock_samples or self._clock_samples[-1].observed_at_ns != self.clock.value_ns:
+        if self._record_clock and (
+            not self._clock_samples or self._clock_samples[-1].observed_at_ns != self.clock.value_ns
+        ):
             self._clock_samples.append(
                 ClockSample(
                     self.clock.value_ns,
@@ -87,6 +98,21 @@ class FakeObserver:
 
     def close(self) -> None:
         self.closed = True
+
+
+class LegacyFakeObserver:
+    def __init__(self, clock: FakeTime, *, source_scale: float = 1.0) -> None:
+        self._delegate = FakeObserver(clock, source_scale=source_scale)
+
+    @property
+    def clock_samples(self) -> tuple[ClockSample, ...]:
+        return self._delegate.clock_samples
+
+    def snapshot(self) -> GraphSnapshot:
+        return self._delegate.snapshot()
+
+    def close(self) -> None:
+        self._delegate.close()
 
 
 def _attributes(values: Mapping[str, str]) -> list[dict[str, object]]:
@@ -358,7 +384,7 @@ def _run_case(
     evidence_path: Path,
     metrics_path: Path,
     measurement_complete_path: Path,
-    observer: FakeObserver,
+    observer: FakeObserver | LegacyFakeObserver,
     clock: FakeTime,
     window: tuple[int, int],
     interval: tuple[datetime, datetime],
@@ -391,6 +417,7 @@ def _simulation_case(
     metric_window: tuple[int, int] = (1_000_000_000, 2_000_000_000),
     source_scale: float = 1,
     include_metrics: bool = True,
+    observer_type: type[FakeObserver] | type[LegacyFakeObserver] = FakeObserver,
 ):
     bundle = _simulation_bundle(tmp_path)
     metrics_path = tmp_path / "metrics.otlp.json"
@@ -417,7 +444,7 @@ def _simulation_case(
         source_id="simulation-clock",
     )
     clock = FakeTime()
-    observer = FakeObserver(clock, source_scale=source_scale)
+    observer = observer_type(clock, source_scale=source_scale)
     started = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
     outputs = _run_case(
         tmp_path,
@@ -489,6 +516,12 @@ def _physical_case(
         interval=(started, started + timedelta(seconds=123)),
     )
     return outputs, observer
+
+
+def test_verification_accepts_legacy_observer_factory(tmp_path: Path) -> None:
+    outputs = _simulation_case(tmp_path, observer_type=LegacyFakeObserver)
+
+    assert outputs.result["status"] == "passed"
 
 
 def test_verification_finalizes_measurement_before_reading_evidence(tmp_path: Path) -> None:

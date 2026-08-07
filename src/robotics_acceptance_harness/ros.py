@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import import_module
+from threading import Lock, Thread
 from time import monotonic_ns
-from typing import Any
+from typing import Any, Literal
 
 from robotics_acceptance_harness.readiness import (
     EndpointObservation,
@@ -30,6 +31,8 @@ class _LifecycleTracker:
 class RosGraphObserver:
     """Read-only rclpy observer attached to an already running ROS domain."""
 
+    DEFAULT_MAX_CLOCK_SAMPLES = 1_000_000
+
     def __init__(
         self,
         expected_graph: Mapping[str, Any],
@@ -38,7 +41,10 @@ class RosGraphObserver:
         forbidden_graph: Mapping[str, Any] | None = None,
         node_name: str = "robotics_acceptance_observer",
         module_loader: Callable[[str], Any] = import_module,
+        max_clock_samples: int = DEFAULT_MAX_CLOCK_SAMPLES,
     ) -> None:
+        if max_clock_samples < 1:
+            raise ValueError("max_clock_samples must be positive")
         try:
             self._rclpy = module_loader("rclpy")
             actions = module_loader("rclpy.action")
@@ -71,12 +77,17 @@ class RosGraphObserver:
             )
             self._executor = executor_module.SingleThreadedExecutor(context=self._context)
             self._executor.add_node(self._node)
+            self._observation_lock = Lock()
             self._subscriptions: list[Any] = []
             self._own_subscription_counts: dict[str, int] = {}
             self._first_messages: dict[str, int] = {}
             self._topic_qos: dict[str, Any] = {}
             self._clock_samples: list[ClockSample] = []
-            self._closed = False
+            self._max_clock_samples = max_clock_samples
+            self._clock_sample_overflow = False
+            self._record_clock = False
+            self._spin_error: Exception | None = None
+            self._state: Literal["open", "closing", "closed"] = "open"
             self._get_message = utilities.get_message
             self._get_state_type = lifecycle_services.GetState
             self._clock_type = clock_messages.Clock
@@ -89,13 +100,57 @@ class RosGraphObserver:
             self._lifecycle: dict[str, _LifecycleTracker] = {}
             self._configure_topics(observe_clock)
             self._configure_lifecycle()
+            self._spin_thread = Thread(
+                target=self._spin,
+                name="robotics-acceptance-ros-observer",
+                daemon=True,
+            )
+            self._spin_thread.start()
         except Exception:
             self._context.try_shutdown()
             raise
 
     @property
     def clock_samples(self) -> tuple[ClockSample, ...]:
-        return tuple(self._clock_samples)
+        with self._observation_lock:
+            return tuple(self._clock_samples)
+
+    def start_clock_observation(self) -> None:
+        self._require_running()
+        with self._observation_lock:
+            self._clock_samples.clear()
+            self._clock_sample_overflow = False
+            self._record_clock = True
+
+    def stop_clock_observation(self) -> tuple[ClockSample, ...]:
+        self._require_running()
+        with self._observation_lock:
+            self._record_clock = False
+            overflow = self._clock_sample_overflow
+            samples = tuple(self._clock_samples)
+        if overflow:
+            raise RosObserverError(
+                "clock observation exceeded the configured limit of "
+                f"{self._max_clock_samples} unique samples"
+            )
+        return samples
+
+    def _spin(self) -> None:
+        try:
+            self._executor.spin()
+        except Exception as error:
+            with self._observation_lock:
+                self._spin_error = error
+
+    def _require_running(self) -> None:
+        if self._state != "open":
+            raise RosObserverError(f"observer is {self._state}")
+        with self._observation_lock:
+            error = self._spin_error
+        if error is not None:
+            raise RosObserverError("ROS executor stopped unexpectedly") from error
+        if not self._spin_thread.is_alive():
+            raise RosObserverError("ROS executor stopped unexpectedly")
 
     def _qos_profile(self, name: str) -> Any:
         profiles = {
@@ -108,15 +163,24 @@ class RosGraphObserver:
 
     def _message_callback(self, topic: str) -> Callable[[Any], None]:
         def callback(_message: Any) -> None:
-            self._first_messages.setdefault(topic, monotonic_ns())
+            with self._observation_lock:
+                self._first_messages.setdefault(topic, monotonic_ns())
 
         return callback
 
     def _clock_callback(self, message: Any) -> None:
         observed_at_ns = monotonic_ns()
-        self._first_messages.setdefault("/clock", observed_at_ns)
         source_time_ns = int(message.clock.sec) * 1_000_000_000 + int(message.clock.nanosec)
-        self._clock_samples.append(ClockSample(observed_at_ns, source_time_ns))
+        with self._observation_lock:
+            self._first_messages.setdefault("/clock", observed_at_ns)
+            changed = (
+                not self._clock_samples or self._clock_samples[-1].source_time_ns != source_time_ns
+            )
+            if self._record_clock and changed:
+                if len(self._clock_samples) >= self._max_clock_samples:
+                    self._clock_sample_overflow = True
+                    return
+                self._clock_samples.append(ClockSample(observed_at_ns, source_time_ns))
 
     def _subscribe(self, topic: str, message_type: Any, qos_profile: Any) -> None:
         callback = self._clock_callback if topic == "/clock" else self._message_callback(topic)
@@ -240,11 +304,11 @@ class RosGraphObserver:
         )
 
     def snapshot(self) -> GraphSnapshot:
-        if self._closed:
-            raise RosObserverError("observer is closed")
-        self._executor.spin_once(timeout_sec=0.0)
+        self._require_running()
         observed_at_ns = monotonic_ns()
         self._poll_lifecycle(observed_at_ns)
+        with self._observation_lock:
+            first_messages = dict(self._first_messages)
 
         topic_types = dict(self._node.get_topic_names_and_types())
         topics: dict[str, TopicObservation] = {}
@@ -257,7 +321,7 @@ class RosGraphObserver:
                 types=tuple(topic_types.get(name, ())),
                 publishers=self._node.count_publishers(name),
                 subscribers=subscribers,
-                first_message_at_ns=self._first_messages.get(name),
+                first_message_at_ns=first_messages.get(name),
                 qos_compatible=(self._qos_compatible(name) if name in self._topic_qos else True),
             )
 
@@ -277,12 +341,19 @@ class RosGraphObserver:
         )
 
     def close(self) -> None:
-        if self._closed:
+        if self._state == "closed":
             return
-        self._closed = True
+        self._state = "closing"
+        stopped = self._executor.shutdown(timeout_sec=5.0)
+        if not stopped:
+            raise RosObserverError("ROS executor did not stop before the timeout")
+        self._spin_thread.join(timeout=5.0)
+        if self._spin_thread.is_alive():
+            raise RosObserverError("ROS executor did not stop before the timeout")
         self._executor.remove_node(self._node)
         self._node.destroy_node()
         self._context.try_shutdown()
+        self._state = "closed"
 
     def __enter__(self) -> RosGraphObserver:
         return self

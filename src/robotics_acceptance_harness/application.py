@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic_ns, sleep, time_ns
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from robotics_acceptance_harness.documents import DocumentBundle
@@ -52,6 +52,12 @@ from robotics_acceptance_harness.timing import (
 class ClockObserver(GraphObserver, Protocol):
     @property
     def clock_samples(self) -> tuple[ClockSample, ...]: ...
+
+
+class WindowedClockObserver(Protocol):
+    def start_clock_observation(self) -> None: ...
+
+    def stop_clock_observation(self) -> tuple[ClockSample, ...]: ...
 
 
 class VerificationError(RuntimeError):
@@ -262,6 +268,15 @@ def run_verification(
             sleep_fn=sleep_fn,
             on_snapshot=forbidden_monitor.observe,
         )
+        start_clock_observation = getattr(observer, "start_clock_observation", None)
+        stop_clock_observation = getattr(observer, "stop_clock_observation", None)
+        windowed_observer = (
+            cast(WindowedClockObserver, observer)
+            if callable(start_clock_observation) and callable(stop_clock_observation)
+            else None
+        )
+        if windowed_observer is not None:
+            windowed_observer.start_clock_observation()
         measurement_started_ns = wall_time_ns()
         measurement_started_monotonic_ns = now_ns()
         deadline_ns = measurement_started_monotonic_ns + int(
@@ -275,11 +290,16 @@ def run_verification(
             sleep_fn(min(poll_interval_sec, remaining_sec))
         measurement_finished_monotonic_ns = now_ns()
         measurement_finished_ns = wall_time_ns()
+        observed_clock_samples = (
+            windowed_observer.stop_clock_observation()
+            if windowed_observer is not None
+            else observer.clock_samples
+        )
         if measurement_finished_ns < measurement_started_ns:
             raise VerificationError("measurement wall clock moved backwards")
         raw_clock_samples = tuple(
             sample
-            for sample in observer.clock_samples
+            for sample in observed_clock_samples
             if measurement_started_monotonic_ns
             <= sample.observed_at_ns
             <= measurement_finished_monotonic_ns
