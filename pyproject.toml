@@ -46,7 +46,7 @@ Issues = "https://github.com/mmkolpakov/robotics-acceptance-harness/issues"
 dev = [
   "coverage[toml]==7.15.0",
   "mypy==2.3.0",
-  "pre-commit==4.6.0",
+  "pre-commit==4.7.0",
   "pytest==9.1.1",
   "ruff==0.15.21",
   "types-protobuf==7.34.1.20260518",
