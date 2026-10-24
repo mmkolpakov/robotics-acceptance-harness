@@ -44,7 +44,7 @@ Issues = "https://github.com/mmkolpakov/robotics-acceptance-harness/issues"
 
 [dependency-groups]
 dev = [
-  "coverage[toml]==7.15.0",
+  "coverage[toml]==7.17.0",
   "mypy==2.3.0",
   "pre-commit==4.6.0",
   "pytest==9.1.1",
